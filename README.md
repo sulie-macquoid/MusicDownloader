@@ -63,3 +63,4 @@ iwr https://raw.githubusercontent.com/<OWNER>/<REPO>/main/scripts/install-window
 See:
 - `docs/PUBLISHING.md`
 
+# MusicDownloader
