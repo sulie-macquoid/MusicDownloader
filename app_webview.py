@@ -1,0 +1,500 @@
+import threading
+import webbrowser
+from collections import deque
+from pathlib import Path
+import sys
+
+import webview
+import yt_dlp
+
+from app import (
+    DB_PATH,
+    DownloadTask,
+    DownloadTracker,
+    clean_song_title,
+    download_one,
+    extract_entries_youtube_detailed,
+    extract_music_queries,
+    extract_urls_from_input,
+    is_youtube_url,
+    make_track,
+    pick_youtube_for_query,
+    safe_filename,
+)
+
+
+class DownloaderAPI:
+    def __init__(self):
+        self.window = None
+        self.tracker = DownloadTracker(DB_PATH)
+
+        self._state_lock = threading.Lock()
+        self.output_dir = str(Path.home() / "Music" / "sully's music downloader")
+        self.dup_mode = "skip"
+        self.output_format = "mp3"
+
+        self.download_queue = deque()
+        self.download_lock = threading.Lock()
+        self.download_running = False
+        self.stop_requested = False
+
+        self.group_meta = {}
+        self.group_order = []
+        self.active_group = ""
+        self.active_title = ""
+
+        self.preview_cache = {}
+
+        self._events = []
+        self._events_lock = threading.Lock()
+
+        self._log("Notes: Only download content you have rights to use.")
+
+    def attach_window(self, window):
+        self.window = window
+
+    def _emit(self, event: str, payload: dict):
+        with self._events_lock:
+            self._events.append({"event": event, "payload": payload})
+
+    def pull_events(self):
+        with self._events_lock:
+            events = self._events[:]
+            self._events.clear()
+        return events
+
+    def _log(self, msg: str):
+        self._emit("log", {"message": msg})
+
+    def _status(self, msg: str):
+        self._emit("status", {"message": msg})
+
+    def _queue_event(self):
+        self._emit("queue", self._queue_snapshot())
+
+    def _download_state_event(self):
+        with self.download_lock:
+            running = self.download_running
+        self._emit("download_state", {"running": running})
+
+    def _queue_snapshot(self):
+        with self.download_lock:
+            groups = []
+            if self.active_group:
+                meta = self.group_meta.get(self.active_group, {"total": 1, "done": 0, "pending": []})
+                groups.append(
+                    {
+                        "name": self.active_group,
+                        "done": int(meta.get("done", 0)),
+                        "total": int(meta.get("total", 1)),
+                        "active": self.active_title,
+                        "pending": list(meta.get("pending", []))[:10],
+                    }
+                )
+
+            for name in self.group_order:
+                if name == self.active_group:
+                    continue
+                meta = self.group_meta.get(name)
+                if not meta:
+                    continue
+                groups.append(
+                    {
+                        "name": name,
+                        "done": int(meta.get("done", 0)),
+                        "total": int(meta.get("total", 1)),
+                        "active": "",
+                        "pending": list(meta.get("pending", []))[:10],
+                    }
+                )
+        return {"groups": groups}
+
+    def get_initial_state(self):
+        with self._state_lock:
+            out = self.output_dir
+            dup = self.dup_mode
+            fmt = self.output_format
+        return {"output_dir": out, "dup_mode": dup, "output_format": fmt}
+
+    def browse_output_folder(self):
+        if not self.window:
+            return ""
+        chosen = self.window.create_file_dialog(webview.FOLDER_DIALOG)
+        if not chosen:
+            return ""
+        folder = chosen[0]
+        with self._state_lock:
+            self.output_dir = folder
+        self._status(f"Output folder set: {folder}")
+        return folder
+
+    def set_output_folder(self, folder: str):
+        folder = (folder or "").strip()
+        if not folder:
+            return False
+        with self._state_lock:
+            self.output_dir = folder
+        return True
+
+    def set_duplicate_mode(self, mode: str):
+        if mode not in ("skip", "force"):
+            return False
+        with self._state_lock:
+            self.dup_mode = mode
+        return True
+
+    def set_output_format(self, output_format: str):
+        output_format = (output_format or "").lower()
+        if output_format not in ("mp3", "mp4"):
+            return False
+        with self._state_lock:
+            self.output_format = output_format
+        return True
+
+    def reset_download_memory(self):
+        self.tracker.reset_download_memory()
+        self._log("Download memory reset. Duplicate history cleared.")
+        return True
+
+    def _resolve_targets(self, url: str):
+        tasks = []
+        if is_youtube_url(url):
+            self._log("Detected YouTube link. Building direct download list...")
+            items, collection_name = extract_entries_youtube_detailed(url)
+            for item in items:
+                title = safe_filename(clean_song_title(item.get("title") or "", "")) or "Unknown Title"
+                group = safe_filename(collection_name) if collection_name else title
+                tasks.append(
+                    DownloadTask(
+                        youtube_url=item["url"],
+                        source_input_url=url,
+                        collection_name=collection_name,
+                        display_title=title,
+                        group_name=group,
+                    )
+                )
+            return tasks
+
+        self._log("Detected non-YouTube link. Parsing track metadata...")
+        queries, collection_name = extract_music_queries(url)
+        for idx, q in enumerate(queries, start=1):
+            self._status(f"Searching YouTube {idx}/{len(queries)}")
+            yt_url = pick_youtube_for_query(q)
+            if not yt_url:
+                self._log(f"  No YouTube match found: {q.artist} - {q.title}")
+                continue
+            title = safe_filename(clean_song_title(q.title, q.artist)) or "Unknown Title"
+            group = safe_filename(collection_name) if collection_name else title
+            tasks.append(
+                DownloadTask(
+                    youtube_url=yt_url,
+                    source_input_url=url,
+                    source_query=q,
+                    collection_name=collection_name,
+                    display_title=title,
+                    group_name=group,
+                )
+            )
+        return tasks
+
+    def _preview_model(self, tasks: list[DownloadTask]):
+        groups = {}
+        order = []
+        for t in tasks:
+            g = t.group_name or t.display_title or "individual"
+            if g not in groups:
+                groups[g] = []
+                order.append(g)
+            groups[g].append(t)
+
+        model = []
+        lines = []
+        for g in order:
+            items = groups[g]
+            model.append(
+                {
+                    "name": g,
+                    "count": len(items),
+                    "songs": [{"title": s.display_title, "url": s.youtube_url} for s in items],
+                }
+            )
+            if len(items) > 1:
+                lines.append(f"* {g} ({len(items)} songs)")
+            else:
+                lines.append(f"* {items[0].display_title} (individual link)")
+            for s in items:
+                lines.append(f"  - {s.display_title}.mp3 ({s.youtube_url})")
+            lines.append("")
+
+        return model, "\n".join(lines).strip()
+
+    def analyze_links(self, raw_input: str):
+        urls = extract_urls_from_input(raw_input or "")
+        if not urls:
+            return {"ok": False, "error": "No valid URL found in input."}
+
+        all_tasks = []
+        for idx, u in enumerate(urls, start=1):
+            self._log(f"[{idx}/{len(urls)}] Resolving {u}")
+            all_tasks.extend(self._resolve_targets(u))
+
+        if not all_tasks:
+            return {"ok": False, "error": "No downloadable items found."}
+
+        dedup = []
+        seen = set()
+        for t in all_tasks:
+            if t.youtube_url in seen:
+                continue
+            seen.add(t.youtube_url)
+            dedup.append(t)
+
+        token = f"preview_{threading.get_ident()}_{len(self.preview_cache)+1}"
+        self.preview_cache[token] = dedup
+
+        groups, editable_text = self._preview_model(dedup)
+        self._log(f"Prepared {len(dedup)} item(s). Waiting for your confirmation...")
+        self._status("Awaiting confirmation")
+        return {
+            "ok": True,
+            "token": token,
+            "total": len(dedup),
+            "groups": groups,
+            "editable_text": editable_text,
+        }
+
+    def _enqueue_downloads(self, tasks: list[DownloadTask]):
+        with self.download_lock:
+            existing = {t.youtube_url for t in self.download_queue}
+            added = 0
+            for t in tasks:
+                if t.youtube_url in existing:
+                    continue
+                self.download_queue.append(t)
+                existing.add(t.youtube_url)
+
+                g = t.group_name or t.display_title
+                if g not in self.group_meta:
+                    self.group_meta[g] = {"total": 0, "done": 0, "pending": []}
+                    self.group_order.append(g)
+                self.group_meta[g]["total"] += 1
+                self.group_meta[g]["pending"].append(t.display_title)
+                added += 1
+            qlen = len(self.download_queue)
+
+        self._status(f"Queued: {qlen}")
+        self._queue_event()
+        return added
+
+    def confirm_add_to_queue(self, token: str, edited_text: str):
+        original = self.preview_cache.pop(token, [])
+        if not original:
+            return {"ok": False, "error": "Preview expired. Analyze again."}
+
+        urls = extract_urls_from_input(edited_text or "")
+        if not urls:
+            return {"ok": False, "error": "No valid URL found in edited list."}
+
+        by_url = {t.youtube_url: t for t in original}
+        new_tasks = []
+        seen = set()
+        for u in urls:
+            if u in seen:
+                continue
+            seen.add(u)
+            t = by_url.get(u)
+            if not t:
+                title = safe_filename(u.rsplit("=", 1)[-1] or "Unknown Title")
+                t = DownloadTask(youtube_url=u, source_input_url=u, display_title=title, group_name=title)
+            new_tasks.append(t)
+
+        added = self._enqueue_downloads(new_tasks)
+        self._log(f"Queued {added} new item(s).")
+        self._start_download_worker_if_needed()
+        return {"ok": True, "added": added}
+
+    def _start_download_worker_if_needed(self):
+        with self.download_lock:
+            if self.download_running:
+                return
+            self.stop_requested = False
+            self.download_running = True
+        self._download_state_event()
+        threading.Thread(target=self._download_worker, daemon=True).start()
+
+    def stop_downloads(self):
+        with self.download_lock:
+            if not self.download_running:
+                return {"ok": False, "message": "No active downloads."}
+            self.stop_requested = True
+            self.download_queue.clear()
+            for g in list(self.group_meta.keys()):
+                self.group_meta[g]["pending"] = []
+        self._log("Stop requested. Finishing current item, then terminating queue.")
+        self._status("Stopping downloads...")
+        self._queue_event()
+        return {"ok": True, "message": "Stopping downloads..."}
+
+    def _pop_download(self):
+        with self.download_lock:
+            if not self.download_queue:
+                return None, 0
+            task = self.download_queue.popleft()
+            return task, len(self.download_queue)
+
+    def _mark_started(self, task: DownloadTask):
+        with self.download_lock:
+            self.active_group = task.group_name or task.display_title
+            self.active_title = task.display_title
+            meta = self.group_meta.get(self.active_group)
+            if meta:
+                try:
+                    meta["pending"].remove(task.display_title)
+                except ValueError:
+                    pass
+        self._queue_event()
+
+    def _mark_finished(self, task: DownloadTask):
+        g = task.group_name or task.display_title
+        with self.download_lock:
+            meta = self.group_meta.get(g)
+            if meta:
+                meta["done"] += 1
+                if meta["done"] >= meta["total"]:
+                    self.group_meta.pop(g, None)
+                    self.group_order = [x for x in self.group_order if x != g]
+            self.active_group = ""
+            self.active_title = ""
+        self._queue_event()
+
+    def _download_worker(self):
+        with self._state_lock:
+            out_dir = Path(self.output_dir).expanduser()
+            dup_mode = self.dup_mode
+            output_format = self.output_format
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        downloaded = 0
+        failures = []
+        idx = 0
+
+        try:
+            while True:
+                with self.download_lock:
+                    stopping = self.stop_requested
+                if stopping:
+                    break
+                task, remain = self._pop_download()
+                if not task:
+                    break
+
+                idx += 1
+                self._mark_started(task)
+                self._status(f"Downloading... queue remaining: {remain}")
+                self._log(f"[{idx}] Checking {task.youtube_url}")
+
+                try:
+                    with yt_dlp.YoutubeDL(
+                        {
+                            "quiet": True,
+                            "no_warnings": True,
+                            "skip_download": True,
+                            "noplaylist": True,
+                            "nocheckcertificate": True,
+                        }
+                    ) as ydl:
+                        info = ydl.extract_info(task.youtube_url, download=False)
+                except Exception as e:
+                    failures.append((task.youtube_url, str(e).splitlines()[0]))
+                    self._log(f"  Failed before download: {failures[-1][1]}")
+                    self._mark_finished(task)
+                    continue
+
+                if not info:
+                    failures.append((task.youtube_url, "Could not read metadata"))
+                    self._log("  Could not read metadata, skipped.")
+                    self._mark_finished(task)
+                    continue
+
+                track = make_track(info)
+                dup = self.tracker.check_duplicate(track)
+                if dup and dup_mode == "skip":
+                    self._log(f"  Duplicate warning: '{track.title}' already downloaded at {dup['downloaded_at']}")
+                    self._log("  Skipped due to duplicate policy.")
+                    self._mark_finished(task)
+                    continue
+
+                try:
+                    target_output = out_dir
+                    folder = task.collection_name or (task.group_name if task.group_name != task.display_title else "")
+                    if folder:
+                        target_output = out_dir / safe_filename(folder)
+                        target_output.mkdir(parents=True, exist_ok=True)
+
+                    saved_track, path = download_one(
+                        task.youtube_url,
+                        target_output,
+                        self._log,
+                        source_query=task.source_query,
+                        output_format=output_format,
+                    )
+                    self.tracker.add_download(saved_track, path)
+                    downloaded += 1
+                except Exception as e:
+                    failures.append((task.youtube_url, str(e).splitlines()[0]))
+                    self._log(f"  Failed: {failures[-1][1]}")
+                finally:
+                    self._mark_finished(task)
+
+            self._log(f"Done. Downloaded: {downloaded}  Error: {len(failures)}")
+            if failures:
+                for i, (u, r) in enumerate(failures, start=1):
+                    self._log(f'{i}. "{u}" couldnt be downloaded: {r}')
+        finally:
+            with self.download_lock:
+                self.download_running = False
+                self.stop_requested = False
+            self._status("Ready")
+            self._download_state_event()
+            self._queue_event()
+
+    def open_url(self, url: str):
+        url = (url or "").strip()
+        if not url:
+            return False
+        webbrowser.open(url)
+        return True
+
+
+def resolve_html_path() -> Path:
+    candidates = []
+    here = Path(__file__).resolve().parent
+    candidates.append(here / "ui" / "index.html")
+    # When bundled as .app, resources live under Contents/Resources.
+    if getattr(sys, "frozen", False):
+        resources = Path(sys.executable).resolve().parents[1] / "Resources"
+        candidates.append(resources / "ui" / "index.html")
+    for p in candidates:
+        if p.exists():
+            return p
+    return candidates[0]
+
+
+def main():
+    html = resolve_html_path()
+    api = DownloaderAPI()
+    window = webview.create_window(
+        "sully's music downloader",
+        url=html.as_uri(),
+        js_api=api,
+        width=1400,
+        height=900,
+        min_size=(1120, 720),
+        background_color="#0B111B",
+    )
+    api.attach_window(window)
+    webview.start(debug=False, gui="cocoa")
+
+
+if __name__ == "__main__":
+    main()

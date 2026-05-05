@@ -1,0 +1,544 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>sully's music downloader</title>
+  <style>
+    :root {
+      --bg: #080c14;
+      --bg2: #0d1321;
+      --card: rgba(15, 24, 40, 0.78);
+      --card-border: rgba(148, 168, 201, 0.18);
+      --text: #ecf2ff;
+      --muted: #9cb0cd;
+      --accent: #58a6ff;
+      --accent2: #3f7be6;
+      --green: #30d07a;
+      --danger: #f47777;
+      --shadow: 0 14px 40px rgba(0, 0, 0, 0.35);
+      --radius: 16px;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      height: 100%;
+      color: var(--text);
+      font-family: "SF Pro Text", "SF Pro Display", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background:
+        radial-gradient(1200px 700px at -10% -10%, #1b2741 0%, transparent 60%),
+        radial-gradient(1000px 650px at 120% 0%, #102445 0%, transparent 60%),
+        linear-gradient(160deg, var(--bg), var(--bg2));
+      overflow: hidden;
+    }
+    .app { height: 100%; display: grid; grid-template-columns: 1.8fr 1fr; gap: 16px; padding: 16px; }
+    .panel {
+      background: var(--card);
+      border: 1px solid var(--card-border);
+      border-radius: var(--radius);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      box-shadow: var(--shadow);
+    }
+    .left { display: grid; grid-template-rows: auto 1fr; gap: 16px; min-width: 0; }
+    .hero { padding: 22px; }
+    h1 { margin: 0; font-size: 30px; letter-spacing: 0.2px; font-weight: 730; }
+    .sub { margin-top: 6px; color: var(--muted); font-size: 15px; }
+    .controls { padding: 16px; display: grid; gap: 14px; min-height: 0; grid-template-rows: auto auto auto auto auto 1fr; }
+    .label { color: var(--muted); font-size: 13px; margin-bottom: 7px; letter-spacing: 0.2px; }
+    textarea, input:not([type="radio"]) {
+      width: 100%;
+      border: 1px solid rgba(148, 168, 201, 0.2);
+      border-radius: 12px;
+      padding: 12px 13px;
+      color: var(--text);
+      background: rgba(7, 13, 25, 0.82);
+      outline: none;
+      font-size: 14px;
+    }
+    textarea:focus, input:not([type="radio"]):focus {
+      border-color: rgba(88, 166, 255, 0.6);
+      box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.18);
+    }
+    #linksInput { min-height: 150px; resize: vertical; }
+    .row { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; }
+    .btn {
+      border: none;
+      border-radius: 12px;
+      color: #fff;
+      padding: 11px 16px;
+      cursor: pointer;
+      font-weight: 620;
+      font-size: 14px;
+      transition: transform 130ms ease, filter 130ms ease, opacity 130ms ease;
+      background: linear-gradient(180deg, var(--accent), var(--accent2));
+    }
+    .btn:hover { filter: brightness(1.08); }
+    .btn:active { transform: translateY(1px) scale(0.995); }
+    .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+    .btn.secondary { background: linear-gradient(180deg, rgba(122, 143, 173, 0.5), rgba(94, 110, 138, 0.45)); }
+    .btn.danger { background: linear-gradient(180deg, #f68a8a, #dd5f5f); }
+    .radio-row {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      align-items: stretch;
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .radio-row label {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      cursor: pointer;
+      border: 1px solid rgba(148, 168, 201, 0.25);
+      border-radius: 12px;
+      padding: 10px 12px;
+      background: rgba(8, 14, 25, 0.72);
+      min-height: 46px;
+      overflow: hidden;
+    }
+    .radio-row label:has(input:checked) {
+      border-color: rgba(88, 166, 255, 0.72);
+      box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.2) inset;
+      color: #d7e8ff;
+    }
+    .radio-row input[type="radio"] { margin: 0; }
+    .action-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .hidden { display: none !important; }
+    .status-pill {
+      padding: 8px 11px;
+      border-radius: 999px;
+      background: rgba(88, 166, 255, 0.16);
+      border: 1px solid rgba(88, 166, 255, 0.3);
+      color: #cbe3ff;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .logs { display: grid; min-height: 0; grid-template-rows: auto auto 1fr; gap: 8px; }
+    #logs {
+      height: 260px;
+      min-height: 260px;
+      max-height: 260px;
+      overflow: auto;
+      border: 1px solid rgba(148, 168, 201, 0.2);
+      border-radius: 12px;
+      background: rgba(7, 13, 25, 0.82);
+      padding: 12px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+      font-size: 13px;
+      line-height: 1.5;
+      color: #d7e2f6;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .log-toolbar {
+      display: flex;
+      justify-content: flex-end;
+      margin-bottom: 6px;
+    }
+    .tiny-btn {
+      border: 1px solid rgba(148, 168, 201, 0.32);
+      background: rgba(8, 14, 25, 0.75);
+      color: #cde2ff;
+      border-radius: 9px;
+      font-size: 12px;
+      padding: 5px 9px;
+      cursor: pointer;
+    }
+    .right { padding: 16px; display: grid; grid-template-rows: auto 1fr; gap: 10px; min-height: 0; }
+    .queue-list { min-height: 0; overflow: auto; display: grid; gap: 10px; padding-right: 2px; }
+    .queue-card {
+      border: 1px solid rgba(148, 168, 201, 0.22);
+      border-radius: 13px;
+      background: rgba(9, 15, 27, 0.86);
+      padding: 10px 12px;
+    }
+    .queue-title {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: center;
+      font-weight: 700;
+      color: #cce2ff;
+      margin-bottom: 7px;
+      font-size: 14px;
+    }
+    .queue-song { color: #d8e5f8; font-size: 13px; padding: 2px 0; opacity: 0.95; }
+    .queue-song.active { color: var(--green); font-weight: 700; }
+    .empty {
+      color: var(--muted);
+      font-size: 14px;
+      border: 1px dashed rgba(148, 168, 201, 0.35);
+      border-radius: 12px;
+      padding: 14px;
+      text-align: center;
+    }
+    .modal {
+      position: fixed;
+      inset: 0;
+      background: rgba(1, 4, 10, 0.62);
+      backdrop-filter: blur(7px);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 20;
+      padding: 20px;
+    }
+    .modal.show { display: flex; }
+    .dialog {
+      width: min(1120px, 96vw);
+      max-height: 90vh;
+      overflow: hidden;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      gap: 10px;
+      padding: 16px;
+      border-radius: 16px;
+      border: 1px solid rgba(148, 168, 201, 0.22);
+      background: rgba(13, 20, 34, 0.96);
+      box-shadow: 0 20px 70px rgba(0, 0, 0, 0.5);
+    }
+    .preview-grid { min-height: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .scroll {
+      min-height: 0;
+      overflow: auto;
+      border: 1px solid rgba(148, 168, 201, 0.22);
+      border-radius: 12px;
+      padding: 12px;
+      background: rgba(8, 14, 25, 0.95);
+    }
+    .preview-group { margin-bottom: 10px; }
+    .preview-group h4 { margin: 0 0 6px; color: #beddff; font-size: 14px; }
+    .preview-item { color: #d9e6f8; font-size: 13px; margin-bottom: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #editableLinks {
+      min-height: 300px;
+      height: 100%;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+      font-size: 12.5px;
+      line-height: 1.4;
+    }
+    @media (max-width: 1050px) {
+      .app { grid-template-columns: 1fr; }
+      .preview-grid { grid-template-columns: 1fr; }
+      .radio-row { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="left">
+      <div class="panel hero">
+        <h1>sully's music downloader</h1>
+        <div class="sub">Desktop downloader with smart link detection, queueing, and metadata-rich MP3/MP4 exports.</div>
+      </div>
+      <div class="panel controls">
+        <div>
+          <div class="label">Paste URL(s): YouTube, YouTube Music, Spotify, Apple, mixed playlists/albums, or individual links</div>
+          <textarea id="linksInput" placeholder="Paste one or more links..."></textarea>
+        </div>
+        <div>
+          <div class="label">Output folder</div>
+          <div class="row">
+            <input id="outputFolder">
+            <button class="btn secondary" id="browseBtn">Browse</button>
+          </div>
+        </div>
+        <div>
+          <div class="label">Download format</div>
+          <div class="radio-row" style="grid-template-columns: repeat(2, minmax(0, 220px));">
+            <label><input type="radio" name="outFormat" value="mp3" checked> MP3 (audio)</label>
+            <label><input type="radio" name="outFormat" value="mp4"> MP4 (video)</label>
+          </div>
+        </div>
+        <div>
+          <div class="label">Duplicate handling</div>
+          <div class="radio-row">
+            <label><input type="radio" name="dupMode" value="skip" checked> Warn + Skip</label>
+            <label><input type="radio" name="dupMode" value="force"> Warn + Download anyway</label>
+          </div>
+        </div>
+        <div class="action-row">
+          <button class="btn" id="analyzeBtn">Analyze + Add To Queue</button>
+          <button class="btn danger" id="resetBtn">Reset Download Memory</button>
+          <button class="btn danger hidden" id="stopBtn">Stop Downloads</button>
+          <div class="status-pill" id="statusPill">Ready</div>
+        </div>
+        <div class="logs">
+          <div class="label">Terminal / Logs</div>
+          <div class="log-toolbar">
+            <button class="tiny-btn" id="jumpLogsBtn" title="Jump to latest log">Jump To Latest</button>
+          </div>
+          <div id="logs"></div>
+        </div>
+      </div>
+    </div>
+    <div class="panel right">
+      <div>
+        <h3 style="margin:0; font-size:24px;">Queue Status</h3>
+        <div style="margin-top:6px; color: var(--muted); font-size:13px;">Album/playlist grouped queue with active download highlight.</div>
+      </div>
+      <div class="queue-list" id="queueList">
+        <div class="empty">No active downloads.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="previewModal">
+    <div class="dialog">
+      <div>
+        <h3 style="margin:0; font-size:22px;">Confirm Download List</h3>
+        <div style="color: var(--muted); font-size:13px; margin-top:4px;">Review titles quickly on the left, edit links on the right before queueing.</div>
+      </div>
+      <div class="preview-grid">
+        <div class="scroll" id="previewGroups"></div>
+        <div class="scroll">
+          <div class="label">Editable links list (Cmd+Z works)</div>
+          <textarea id="editableLinks"></textarea>
+        </div>
+      </div>
+      <div class="action-row" style="justify-content:flex-end;">
+        <button class="btn secondary" id="cancelPreviewBtn">Cancel</button>
+        <button class="btn" id="confirmPreviewBtn">Add To Queue</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const state = { previewToken: "", busyAnalyze: false, followLogs: true };
+    const els = {
+      linksInput: document.getElementById("linksInput"),
+      outputFolder: document.getElementById("outputFolder"),
+      browseBtn: document.getElementById("browseBtn"),
+      analyzeBtn: document.getElementById("analyzeBtn"),
+      resetBtn: document.getElementById("resetBtn"),
+      stopBtn: document.getElementById("stopBtn"),
+      statusPill: document.getElementById("statusPill"),
+      logs: document.getElementById("logs"),
+      jumpLogsBtn: document.getElementById("jumpLogsBtn"),
+      queueList: document.getElementById("queueList"),
+      previewModal: document.getElementById("previewModal"),
+      previewGroups: document.getElementById("previewGroups"),
+      editableLinks: document.getElementById("editableLinks"),
+      cancelPreviewBtn: document.getElementById("cancelPreviewBtn"),
+      confirmPreviewBtn: document.getElementById("confirmPreviewBtn"),
+    };
+
+    function setStatus(msg) {
+      els.statusPill.textContent = msg || "Ready";
+    }
+
+    function addLog(line) {
+      const distanceFromBottom = els.logs.scrollHeight - els.logs.scrollTop - els.logs.clientHeight;
+      const nearBottom = distanceFromBottom < 28;
+      const stamp = new Date().toLocaleTimeString();
+      els.logs.textContent += "[" + stamp + "] " + line + "\n";
+      if (state.followLogs || nearBottom) {
+        els.logs.scrollTop = els.logs.scrollHeight;
+      }
+    }
+
+    function escapeHtml(s) {
+      return String(s)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll("\"", "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    function renderQueue(snapshot) {
+      const groups = (snapshot && snapshot.groups) ? snapshot.groups : [];
+      els.queueList.innerHTML = "";
+      if (!groups.length) {
+        els.queueList.innerHTML = "<div class=\"empty\">No active downloads.</div>";
+        return;
+      }
+
+      groups.forEach((group) => {
+        const card = document.createElement("div");
+        card.className = "queue-card";
+
+        const title = document.createElement("div");
+        title.className = "queue-title";
+        const count = group.total > 1 ? "(" + group.done + "/" + group.total + ")" : "(single)";
+        title.innerHTML = "<span>" + escapeHtml(group.name) + "</span><span style=\"color:#8eb9ff;font-weight:600;\">" + count + "</span>";
+        card.appendChild(title);
+
+        if (group.active) {
+          const row = document.createElement("div");
+          row.className = "queue-song active";
+          row.textContent = "• " + group.active + ".mp3 downloading...";
+          card.appendChild(row);
+        }
+
+        (group.pending || []).forEach((song) => {
+          const row = document.createElement("div");
+          row.className = "queue-song";
+          row.textContent = "• " + song + ".mp3";
+          card.appendChild(row);
+        });
+
+        els.queueList.appendChild(card);
+      });
+    }
+
+    function openPreview(result) {
+      state.previewToken = result.token;
+      els.previewGroups.innerHTML = "";
+      (result.groups || []).forEach((g) => {
+        const wrap = document.createElement("div");
+        wrap.className = "preview-group";
+        const heading = document.createElement("h4");
+        heading.textContent = g.name + " (" + g.count + " song" + (g.count === 1 ? "" : "s") + ")";
+        wrap.appendChild(heading);
+
+        (g.songs || []).forEach((s) => {
+          const it = document.createElement("div");
+          it.className = "preview-item";
+          it.textContent = "• " + s.title + ".mp3";
+          it.title = s.url;
+          wrap.appendChild(it);
+        });
+        els.previewGroups.appendChild(wrap);
+      });
+      els.editableLinks.value = result.editable_text || "";
+      els.previewModal.classList.add("show");
+    }
+
+    function closePreview() {
+      state.previewToken = "";
+      els.previewModal.classList.remove("show");
+    }
+
+    function getDupMode() {
+      const checked = document.querySelector("input[name='dupMode']:checked");
+      return checked ? checked.value : "skip";
+    }
+
+    function getOutputFormat() {
+      const checked = document.querySelector("input[name='outFormat']:checked");
+      return checked ? checked.value : "mp3";
+    }
+
+    async function syncSettings() {
+      if (!window.pywebview || !window.pywebview.api) return;
+      await window.pywebview.api.set_output_folder(els.outputFolder.value || "");
+      await window.pywebview.api.set_duplicate_mode(getDupMode());
+      await window.pywebview.api.set_output_format(getOutputFormat());
+    }
+
+    async function analyze() {
+      if (state.busyAnalyze) return;
+      const raw = els.linksInput.value.trim();
+      if (!raw) {
+        addLog("Please paste at least one URL.");
+        return;
+      }
+      state.busyAnalyze = true;
+      els.analyzeBtn.disabled = true;
+      setStatus("Analyzing links...");
+      await syncSettings();
+      try {
+        const result = await window.pywebview.api.analyze_links(raw);
+        if (!result || !result.ok) {
+          addLog((result && result.error) || "Failed to analyze links.");
+          setStatus("Ready");
+          return;
+        }
+        openPreview(result);
+      } catch (err) {
+        addLog("Error during analysis: " + err);
+        setStatus("Ready");
+      } finally {
+        state.busyAnalyze = false;
+        els.analyzeBtn.disabled = false;
+      }
+    }
+
+    async function confirmPreview() {
+      if (!state.previewToken) return;
+      try {
+        const result = await window.pywebview.api.confirm_add_to_queue(state.previewToken, els.editableLinks.value || "");
+        if (!result || !result.ok) {
+          addLog((result && result.error) || "Could not add to queue.");
+          return;
+        }
+        addLog("Queued " + result.added + " item(s).");
+        closePreview();
+        els.linksInput.value = "";
+      } catch (err) {
+        addLog("Error queueing items: " + err);
+      }
+    }
+
+    async function browse() {
+      const selected = await window.pywebview.api.browse_output_folder();
+      if (selected) els.outputFolder.value = selected;
+    }
+
+    async function resetMemory() {
+      if (!confirm("Clear duplicate memory of downloaded songs?")) return;
+      await window.pywebview.api.reset_download_memory();
+    }
+
+    async function stopDownloads() {
+      try {
+        const result = await window.pywebview.api.stop_downloads();
+        if (result && result.message) addLog(result.message);
+      } catch (err) {
+        addLog("Error stopping downloads: " + err);
+      }
+    }
+
+    async function pollEvents() {
+      if (!window.pywebview || !window.pywebview.api) return;
+      try {
+        const events = await window.pywebview.api.pull_events();
+        (events || []).forEach((e) => {
+          if (e.event === "log") addLog(e.payload.message);
+          if (e.event === "status") setStatus(e.payload.message);
+          if (e.event === "queue") renderQueue(e.payload);
+          if (e.event === "download_state") {
+            const running = !!(e.payload && e.payload.running);
+            els.stopBtn.classList.toggle("hidden", !running);
+          }
+        });
+      } catch (_) {}
+    }
+
+    window.addEventListener("pywebviewready", async () => {
+      const initial = await window.pywebview.api.get_initial_state();
+      els.outputFolder.value = initial.output_dir || "";
+      const mode = initial.dup_mode || "skip";
+      const radio = document.querySelector("input[name='dupMode'][value='" + mode + "']");
+      if (radio) radio.checked = true;
+      const outFmt = initial.output_format || "mp3";
+      const fmtRadio = document.querySelector("input[name='outFormat'][value='" + outFmt + "']");
+      if (fmtRadio) fmtRadio.checked = true;
+      setStatus("Ready");
+      setInterval(pollEvents, 250);
+      pollEvents();
+    });
+
+    els.logs.addEventListener("scroll", () => {
+      const distanceFromBottom = els.logs.scrollHeight - els.logs.scrollTop - els.logs.clientHeight;
+      state.followLogs = distanceFromBottom < 28;
+    });
+    els.jumpLogsBtn.addEventListener("click", () => {
+      els.logs.scrollTop = els.logs.scrollHeight;
+      state.followLogs = true;
+    });
+
+    els.analyzeBtn.addEventListener("click", analyze);
+    els.browseBtn.addEventListener("click", browse);
+    els.resetBtn.addEventListener("click", resetMemory);
+    els.stopBtn.addEventListener("click", stopDownloads);
+    els.confirmPreviewBtn.addEventListener("click", confirmPreview);
+    els.cancelPreviewBtn.addEventListener("click", closePreview);
+    els.outputFolder.addEventListener("change", syncSettings);
+    document.querySelectorAll("input[name='dupMode']").forEach((el) => el.addEventListener("change", syncSettings));
+    document.querySelectorAll("input[name='outFormat']").forEach((el) => el.addEventListener("change", syncSettings));
+  </script>
+</body>
+</html>
