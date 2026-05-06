@@ -101,21 +101,3 @@ Output: `dist\Sully's Music Downloader.exe`
 
 > **Note:** Keep `ui/index.html` bundled if switching to one-folder mode.
 > For reliable ffmpeg usage on Windows, install ffmpeg and add it to your PATH.
-
-## One-Line Installers
-
-After publishing releases, users can install with:
-
-**macOS:**
-```bash
-curl -fsSL https://raw.githubusercontent.com/sulie-macquoid/MusicDownloader/main/scripts/install-macos.sh | bash
-```
-
-**Windows (PowerShell):**
-```powershell
-iwr https://raw.githubusercontent.com/sulie-macquoid/MusicDownloader/main/scripts/install-windows.ps1 -UseBasicParsing | iex
-```
-
-## Publishing Guide
-
-See [docs/PUBLISHING.md](docs/PUBLISHING.md) for detailed packaging and release instructions.
