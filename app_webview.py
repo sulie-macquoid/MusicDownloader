@@ -470,9 +470,11 @@ def resolve_html_path() -> Path:
     candidates = []
     here = Path(__file__).resolve().parent
     candidates.append(here / "ui" / "index.html")
-    # When bundled as .app, resources live under Contents/Resources.
     if getattr(sys, "frozen", False):
-        resources = Path(sys.executable).resolve().parents[1] / "Resources"
+        if sys.platform == "darwin":
+            resources = Path(sys.executable).resolve().parents[1] / "Resources"
+        else:
+            resources = Path(sys.executable).resolve().parent
         candidates.append(resources / "ui" / "index.html")
     for p in candidates:
         if p.exists():
@@ -493,7 +495,7 @@ def main():
         background_color="#0B111B",
     )
     api.attach_window(window)
-    webview.start(debug=False, gui="cocoa")
+    webview.start(debug=False, gui="edgechromium" if sys.platform == "win32" else None)
 
 
 if __name__ == "__main__":

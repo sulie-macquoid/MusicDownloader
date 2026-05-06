@@ -1,3 +1,4 @@
+import os
 import re
 import sqlite3
 import threading
@@ -20,9 +21,10 @@ from mutagen.id3 import APIC, ID3, TALB, TDRC, TIT2, TPE1, TXXX
 
 
 def app_data_dir() -> Path:
-    # Keep runtime state in a user-writable location (important for packaged .app).
     if sys.platform == "darwin":
         root = Path.home() / "Library" / "Application Support" / "sully's music downloader"
+    elif sys.platform == "win32":
+        root = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / "sully's music downloader"
     else:
         root = Path.home() / ".sullys-music-downloader"
     root.mkdir(parents=True, exist_ok=True)
@@ -124,9 +126,16 @@ def detect_ffmpeg_location() -> str:
     found = shutil.which("ffmpeg")
     if found:
         return str(Path(found).parent)
-    for candidate in ("/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"):
-        if Path(candidate).exists():
-            return str(Path(candidate).parent)
+    if sys.platform == "darwin":
+        for candidate in ("/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"):
+            if Path(candidate).exists():
+                return str(Path(candidate).parent)
+    elif sys.platform == "win32":
+        # Check common Windows install locations.
+        pf = os.environ.get("PROGRAMFILES", "C:\\Program Files")
+        for candidate in [Path(pf) / "ffmpeg" / "bin" / "ffmpeg.exe", Path(pf) / "ffmpeg" / "ffmpeg.exe"]:
+            if candidate.exists():
+                return str(candidate.parent)
     return ""
 
 
@@ -723,13 +732,18 @@ def download_one(
 
 
 class App:
+    def _default_output_dir(self) -> str:
+        if sys.platform == "win32":
+            return str(Path.home() / "Music" / "sully's music downloader")
+        return str(Path.home() / "Music" / "sully's music downloader")
+
     def __init__(self, root: Tk):
         self.root = root
         self.root.title("sully's music downloader")
         self.root.geometry("920x620")
 
         self.url_var = StringVar()
-        self.output_var = StringVar(value=str(Path.home() / "Music" / "sully's music downloader"))
+        self.output_var = StringVar(value=self._default_output_dir())
         self.dup_mode = StringVar(value="skip")
         self.status_var = StringVar(value="Ready")
 

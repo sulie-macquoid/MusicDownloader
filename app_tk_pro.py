@@ -62,6 +62,10 @@ class ConfirmDialog(tk.Toplevel):
         self.bind("<Command-Z>", lambda e: self.undo())
         self.bind("<Command-Shift-Z>", lambda e: self.redo())
         self.bind("<Command-y>", lambda e: self.redo())
+        self.bind("<Control-z>", lambda e: self.undo())
+        self.bind("<Control-Z>", lambda e: self.undo())
+        self.bind("<Control-Shift-Z>", lambda e: self.redo())
+        self.bind("<Control-y>", lambda e: self.redo())
 
     def undo(self):
         try:

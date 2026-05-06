@@ -1,3 +1,4 @@
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -201,7 +202,7 @@ class PreviewDialog(QDialog):
 
         self.text = QTextEdit()
         self.text.setPlainText("\n".join(lines))
-        font = QFont("Menlo")
+        font = QFont("Consolas" if sys.platform == "win32" else "Menlo")
         font.setStyleHint(QFont.Monospace)
         self.text.setFont(font)
         layout.addWidget(self.text)
