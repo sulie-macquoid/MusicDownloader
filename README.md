@@ -52,8 +52,8 @@ python -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 
-# Install ffmpeg (add to PATH)
-# https://ffmpeg.org/download.html
+# Install ffmpeg
+winget install Gyan.FFmpeg
 
 # Run the app
 python launcher.py
