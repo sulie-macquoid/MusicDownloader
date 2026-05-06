@@ -224,7 +224,7 @@ class PreviewDialog(QDialog):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Link to MP3 Downloader (Fast UI)")
+        self.setWindowTitle("Sully's music downloader")
         self.resize(1060, 760)
 
         self.resolve_thread = None

@@ -8,8 +8,8 @@ OPTIONS = {
     'packages': ['webview', 'customtkinter', 'yt_dlp', 'mutagen'],
     'includes': ['app', 'app_webview', 'app_tk_pro', 'app_ctk'],
     'plist': {
-        'CFBundleName': "sully's music downloader",
-        'CFBundleDisplayName': "sully's music downloader",
+        'CFBundleName': "Sully's Music Downloader",
+        'CFBundleDisplayName': "Sully's Music Downloader",
         'CFBundleIdentifier': 'com.sulie.sullysmusicdownloader',
         'CFBundleVersion': '1.0.0',
         'CFBundleShortVersionString': '1.0.0',
