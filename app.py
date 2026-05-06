@@ -7,17 +7,29 @@ import urllib.request
 import json
 import ssl
 import shutil
+import subprocess
 from html import unescape
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from tkinter import END, StringVar, Tk, Toplevel, filedialog, messagebox, ttk
+from tkinter import END, StringVar, BooleanVar, IntVar, Tk, Toplevel, filedialog, messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 from urllib.parse import urlparse
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from enum import Enum
 
 import yt_dlp
-from mutagen.id3 import APIC, ID3, TALB, TDRC, TIT2, TPE1, TXXX
+from mutagen.id3 import APIC, ID3, TALB, TDRC, TIT2, TPE1, TXXX, USLT
+from mutagen.flac import FLAC, Picture
+from mutagen import File as MutagenFile
+
+from config import Config, DEFAULTS, QUALITY_PRESETS
+
+try:
+    from config import app_data_dir as _cfg_app_data_dir
+except ImportError:
+    _cfg_app_data_dir = None
 
 
 def app_data_dir() -> Path:
@@ -32,7 +44,21 @@ def app_data_dir() -> Path:
 
 
 DB_PATH = app_data_dir() / "downloads.db"
+CONFIG_PATH = app_data_dir() / "config.json"
 YOUTUBE_HOST_MARKERS = ("youtube.com", "youtu.be", "music.youtube.com")
+REPO_URL = "https://api.github.com/repos/sulie-macquoid/MusicDownloader/releases/latest"
+GITHUB_REPO_URL = "https://github.com/sulie-macquoid/MusicDownloader"
+CURRENT_VERSION = "1.0.0"
+
+
+class DownloadState(Enum):
+    PENDING = "pending"
+    DOWNLOADING = "downloading"
+    DONE = "done"
+    SKIPPED = "skipped"
+    FAILED = "failed"
+    PAUSED = "paused"
+    CANCELLED = "cancelled"
 
 
 @dataclass
@@ -66,6 +92,13 @@ class DownloadTask:
     group_name: str = ""
 
 
+@dataclass
+class QueuedTask:
+    task: DownloadTask
+    state: DownloadState = DownloadState.PENDING
+    event: threading.Event = field(default_factory=threading.Event)
+
+
 def normalize_title(title: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]", " ", (title or "").lower())).strip()
 
@@ -75,20 +108,16 @@ def clean_song_title(raw_title: str, artist_hint: str = "") -> str:
     if not title:
         return "Unknown Title"
 
-    # Remove common trailing id suffixes like " [abc123]"
     title = re.sub(r"\s*\[[^\]]+\]\s*$", "", title, flags=re.IGNORECASE)
 
-    # If format looks like "Artist - Song", prefer song part.
     if artist_hint and title.lower().startswith(artist_hint.lower() + " - "):
         title = title[len(artist_hint) + 3 :].strip()
     elif " - " in title:
         parts = [p.strip() for p in title.split(" - ", 1)]
         if len(parts) == 2 and parts[0] and parts[1]:
-            # Heuristic: treat leading segment as artist/uploader in common cases.
             if len(parts[0].split()) <= 6:
                 title = parts[1]
 
-    # Remove noisy parenthetical/suffix descriptors.
     noise = (
         r"official video|official visualizer|official audio|audio only|lyric video|lyrics|"
         r"music video|visualizer|mv|hd|4k|topic"
@@ -97,7 +126,6 @@ def clean_song_title(raw_title: str, artist_hint: str = "") -> str:
     title = re.sub(rf"\s*\[(?:{noise})[^\]]*\]\s*", " ", title, flags=re.IGNORECASE)
     title = re.sub(rf"\s*-\s*(?:{noise}).*$", "", title, flags=re.IGNORECASE)
 
-    # Normalize whitespace and trim punctuation.
     title = re.sub(r"\s+", " ", title).strip(" -_.,")
     return title or "Unknown Title"
 
@@ -108,21 +136,20 @@ def safe_filename(name: str) -> str:
     return cleaned or "Unknown Title"
 
 
-def unique_mp3_path(output_dir: Path, title: str) -> Path:
+def unique_media_path(output_dir: Path, title: str, ext: str) -> Path:
     base = safe_filename(title)
-    candidate = output_dir / f"{base}.mp3"
+    candidate = output_dir / f"{base}.{ext}"
     if not candidate.exists():
         return candidate
     i = 2
     while True:
-        alt = output_dir / f"{base} ({i}).mp3"
+        alt = output_dir / f"{base} ({i}).{ext}"
         if not alt.exists():
             return alt
         i += 1
 
 
 def detect_ffmpeg_location() -> str:
-    # Finder-launched macOS apps may not inherit Homebrew PATH.
     found = shutil.which("ffmpeg")
     if found:
         return str(Path(found).parent)
@@ -131,7 +158,6 @@ def detect_ffmpeg_location() -> str:
             if Path(candidate).exists():
                 return str(Path(candidate).parent)
     elif sys.platform == "win32":
-        # Check common Windows install locations.
         pf = os.environ.get("PROGRAMFILES", "C:\\Program Files")
         for candidate in [Path(pf) / "ffmpeg" / "bin" / "ffmpeg.exe", Path(pf) / "ffmpeg" / "ffmpeg.exe"]:
             if candidate.exists():
@@ -224,7 +250,6 @@ def extract_spotify_queries(url: str):
         page,
         flags=re.IGNORECASE,
     )
-    # Cap to avoid very long processing on massive playlists.
     track_urls = list(dict.fromkeys(track_urls))[:200]
 
     queries = []
@@ -298,7 +323,6 @@ def extract_apple_queries(url: str):
         collection_name = queries[0].album if queries else ""
         return queries, collection_name
 
-    # Fallback for unsupported Apple link types.
     page = fetch_text(url)
     title = extract_meta_value(page, "og:title", prop=True)
     if title:
@@ -330,7 +354,6 @@ def extract_urls_from_input(text: str):
     raw_urls = re.findall(r"https?://[^\s]+", text or "")
     cleaned = []
     for u in raw_urls:
-        # Strip common trailing punctuation from editable list formats like "(url)".
         u = u.rstrip(").,;]>\"'")
         cleaned.append(u)
     return list(dict.fromkeys(cleaned))
@@ -431,8 +454,82 @@ def embed_cover_if_available(tags: ID3, artwork_url: str):
         tags.delall("APIC")
         tags.add(APIC(encoding=3, mime=mime, type=3, desc="Cover", data=raw))
     except Exception:
-        # Keep existing embedded thumbnail if artwork download fails.
         return
+
+
+def fetch_lyrics(title: str, artist: str) -> str | None:
+    try:
+        url = f"https://lrclib.net/api/get?artist_name={urllib.parse.quote(artist)}&track_name={urllib.parse.quote(title)}"
+        req = urllib.request.Request(url, headers={"User-Agent": "sullys-music-downloader"})
+        ctx = ssl._create_unverified_context()
+        with urllib.request.urlopen(req, timeout=15, context=ctx) as response:
+            data = json.loads(response.read().decode("utf-8"))
+            return data.get("plainLyrics") or data.get("syncedLyrics")
+    except Exception:
+        return None
+
+
+def embed_lyrics_if_available(media_path: Path, title: str, artist: str, fmt: str = "mp3"):
+    if not media_path.exists():
+        return
+    lyrics = fetch_lyrics(title, artist)
+    if not lyrics:
+        return
+    try:
+        if fmt == "mp3":
+            tags = ID3(str(media_path))
+            tags.delall("USLT")
+            tags.add(USLT(encoding=3, lang="eng", desc="Lyrics", text=lyrics))
+            tags.save(v2_version=3)
+        elif fmt == "flac":
+            tags = FLAC(str(media_path))
+            tags["lyrics"] = [lyrics]
+            tags.save()
+    except Exception:
+        pass
+
+
+def _embed_cover_flac(flac_file: FLAC, artwork_url: str):
+    if not artwork_url:
+        return
+    try:
+        raw = urllib.request.urlopen(artwork_url, timeout=20, context=ssl._create_unverified_context()).read()
+        if not raw:
+            return
+        pic = Picture()
+        pic.type = 3
+        pic.desc = "Cover"
+        pic.data = raw
+        lowered = artwork_url.lower()
+        pic.mime = "image/png" if ".png" in lowered else "image/jpeg"
+        flac_file.add_picture(pic)
+    except Exception:
+        pass
+
+
+def enrich_flac_tags(flac_path: Path, track: TrackInfo, source_query: MusicQuery | None = None):
+    if not flac_path.exists():
+        return
+    try:
+        tags = FLAC(str(flac_path))
+        tags["title"] = [source_query.title if source_query and source_query.title else track.title]
+        tags["artist"] = [source_query.artist if source_query and source_query.artist else track.artist]
+        if source_query and source_query.album:
+            tags["album"] = [source_query.album]
+        published = ""
+        if source_query and source_query.release_date:
+            published = source_query.release_date
+        else:
+            published = format_upload_date(track.upload_date)
+        if published:
+            tags["date"] = [published]
+        if source_query and source_query.artwork_url:
+            _embed_cover_flac(tags, source_query.artwork_url)
+        tags.save()
+    except Exception:
+        pass
+    except Exception:
+        pass
 
 
 def enrich_mp3_tags(mp3_path: Path, track: TrackInfo, source_query: MusicQuery | None = None):
@@ -586,7 +683,6 @@ def extract_music_queries(url: str):
         else:
             queries, collection_name = extract_generic_queries(url)
 
-    # Deduplicate near-identical queries while preserving order.
     seen = set()
     result = []
     for q in queries:
@@ -660,12 +756,54 @@ def pick_youtube_for_query(query: MusicQuery):
     return None
 
 
+def _build_download_opts(output_dir: Path, quality_key: str):
+    preset = QUALITY_PRESETS.get(quality_key, QUALITY_PRESETS["mp3_320"])
+    fmt = preset["format"]
+
+    opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": True,
+        "nocheckcertificate": True,
+        "writethumbnail": fmt in ("mp3", "flac"),
+        "addmetadata": True,
+        "outtmpl": str(output_dir / "__tmp__%(id)s.%(ext)s"),
+    }
+
+    if fmt == "mp3":
+        bitrate = preset.get("bitrate", "320")
+        opts["format"] = "bestaudio/best"
+        opts["postprocessors"] = [
+            {"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": bitrate},
+            {"key": "FFmpegMetadata"},
+            {"key": "EmbedThumbnail"},
+        ]
+    elif fmt == "flac":
+        opts["format"] = "bestaudio/best"
+        opts["postprocessors"] = [
+            {"key": "FFmpegExtractAudio", "preferredcodec": "flac", "preferredquality": "0"},
+            {"key": "FFmpegMetadata"},
+            {"key": "EmbedThumbnail"},
+        ]
+    elif fmt == "mp4":
+        resolution = preset.get("resolution", "720")
+        opts["format"] = f"bestvideo[height<={resolution}]+bestaudio/best[height<={resolution}]/best"
+        opts["merge_output_format"] = "mp4"
+        opts["postprocessors"] = [{"key": "FFmpegMetadata"}]
+
+    ffmpeg_location = detect_ffmpeg_location()
+    if ffmpeg_location:
+        opts["ffmpeg_location"] = ffmpeg_location
+
+    return opts, fmt
+
+
 def download_one(
     url: str,
     output_dir: Path,
     log,
     source_query: MusicQuery | None = None,
-    output_format: str = "mp3",
+    quality_key: str = "mp3_320",
 ):
     opts = {
         "quiet": True,
@@ -681,74 +819,100 @@ def download_one(
 
     track = make_track(info)
 
-    output_format = (output_format or "mp3").lower()
-    if output_format not in {"mp3", "mp4"}:
-        output_format = "mp3"
+    dl_opts, fmt = _build_download_opts(output_dir, quality_key)
 
-    download_opts = {
-        "quiet": True,
-        "no_warnings": True,
-        "noplaylist": True,
-        "nocheckcertificate": True,
-        "writethumbnail": output_format == "mp3",
-        "addmetadata": True,
-        # Temporary unique name; we'll rename to clean title after conversion/merge.
-        "outtmpl": str(output_dir / "__tmp__%(id)s.%(ext)s"),
-        "format": "bestaudio/best" if output_format == "mp3" else "bestvideo*+bestaudio/best",
-        "postprocessors": (
-            [
-                {"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "0"},
-                {"key": "FFmpegMetadata"},
-                {"key": "EmbedThumbnail"},
-            ]
-            if output_format == "mp3"
-            else [{"key": "FFmpegMetadata"}]
-        ),
-    }
-    if output_format == "mp4":
-        download_opts["merge_output_format"] = "mp4"
-    ffmpeg_location = detect_ffmpeg_location()
-    if ffmpeg_location:
-        download_opts["ffmpeg_location"] = ffmpeg_location
-
-    with yt_dlp.YoutubeDL(download_opts) as ydl:
+    with yt_dlp.YoutubeDL(dl_opts) as ydl:
         result = ydl.extract_info(url, download=True)
         prepared = Path(ydl.prepare_filename(result))
 
-    target_ext = ".mp3" if output_format == "mp3" else ".mp4"
+    ext_map = {"mp3": ".mp3", "flac": ".flac", "mp4": ".mp4"}
+    target_ext = ext_map.get(fmt, ".mp3")
     media_path = prepared.with_suffix(target_ext)
     chosen_title = source_query.title if source_query and source_query.title else track.title
     chosen_title = clean_song_title(chosen_title, source_query.artist if source_query else track.artist)
-    final_media = unique_mp3_path(output_dir, chosen_title).with_suffix(target_ext)
+    final_media = unique_media_path(output_dir, chosen_title, fmt)
 
     if media_path.exists() and media_path != final_media:
         media_path.rename(final_media)
     media_path = final_media
 
-    if output_format == "mp3":
+    if fmt == "mp3":
         enrich_mp3_tags(media_path, track, source_query=source_query)
+    elif fmt == "flac":
+        enrich_flac_tags(media_path, track, source_query=source_query)
     log(f"Saved: {media_path.name}")
     return track, str(media_path)
 
 
-class App:
-    def _default_output_dir(self) -> str:
-        if sys.platform == "win32":
-            return str(Path.home() / "Music" / "sully's music downloader")
-        return str(Path.home() / "Music" / "sully's music downloader")
+def notify(title: str, message: str):
+    try:
+        if sys.platform == "darwin":
+            subprocess.run(
+                ["osascript", "-e", f'display notification "{message}" with title "{title}"'],
+                check=False, capture_output=True,
+            )
+        elif sys.platform == "win32":
+            subprocess.run(
+                [
+                    "powershell", "-Command",
+                    f'[System.Windows.Forms.MessageBox]::Show("{message}", "{title}")',
+                ],
+                check=False, capture_output=True, timeout=5,
+            )
+            return
+    except Exception:
+        pass
 
+    try:
+        from plyer import notification as plyer_not
+        plyer_not.notify(title=title, message=message, app_name="Sully's Music Downloader")
+    except Exception:
+        pass
+
+
+def check_for_updates() -> str | None:
+    try:
+        req = urllib.request.Request(REPO_URL, headers={"Accept": "application/vnd.github.v3+json"})
+        ctx = ssl._create_unverified_context()
+        with urllib.request.urlopen(req, timeout=10, context=ctx) as response:
+            data = json.loads(response.read().decode("utf-8"))
+            latest = data.get("tag_name", "").lstrip("v")
+            if latest and latest != CURRENT_VERSION:
+                return latest
+    except Exception:
+        pass
+    return None
+
+
+class App:
     def __init__(self, root: Tk):
         self.root = root
         self.root.title("sully's music downloader")
-        self.root.geometry("920x620")
+        self.root.geometry("980x680")
+
+        self.cfg = Config(CONFIG_PATH)
+        saved = self.cfg.load()
 
         self.url_var = StringVar()
-        self.output_var = StringVar(value=self._default_output_dir())
-        self.dup_mode = StringVar(value="skip")
+        output_default = saved.get("output_folder", "") or str(Path.home() / "Music" / "sully's music downloader")
+        self.output_var = StringVar(value=output_default)
+        self.dup_mode = StringVar(value=saved.get("dup_mode", "skip"))
+        self.quality_var = StringVar(value=saved.get("quality", "mp3_320"))
+        self.embed_lyrics_var = BooleanVar(value=saved.get("embed_lyrics", False))
+        self.concurrency_var = IntVar(value=min(3, max(1, saved.get("concurrency", 1))))
         self.status_var = StringVar(value="Ready")
 
         self.tracker = DownloadTracker(DB_PATH)
+        self.queue: list[QueuedTask] = []
+        self.queue_lock = threading.Lock()
+        self._stop_event = threading.Event()
+        self._pause_event = threading.Event()
+        self._pause_event.set()
+
         self._build_ui()
+        self._apply_theme()
+        self._setup_drag_drop()
+        self._check_updates()
 
     def _build_ui(self):
         pad = {"padx": 10, "pady": 8}
@@ -756,8 +920,9 @@ class App:
         main = ttk.Frame(self.root)
         main.pack(fill="both", expand=True, padx=12, pady=12)
 
-        ttk.Label(main, text="Paste URL(s) (YouTube/YouTube Music/Spotify/Apple/etc.):").pack(anchor="w")
-        ttk.Entry(main, textvariable=self.url_var).pack(fill="x", **pad)
+        ttk.Label(main, text="Paste URL(s) (YouTube/YouTube Music/Spotify/Apple/etc.) — drag & drop supported:").pack(anchor="w")
+        self.url_entry = ttk.Entry(main, textvariable=self.url_var)
+        self.url_entry.pack(fill="x", **pad)
 
         row = ttk.Frame(main)
         row.pack(fill="x")
@@ -765,23 +930,98 @@ class App:
         ttk.Entry(row, textvariable=self.output_var).pack(side="left", fill="x", expand=True, padx=8)
         ttk.Button(row, text="Browse", command=self.pick_output).pack(side="left")
 
+        settings_row = ttk.Frame(main)
+        settings_row.pack(fill="x", **pad)
+
+        ttk.Label(settings_row, text="Quality:").pack(side="left")
+        self.quality_combo = ttk.Combobox(settings_row, textvariable=self.quality_var, width=14, state="readonly")
+        self.quality_combo["values"] = [
+            "mp3_128", "mp3_256", "mp3_320",
+            "flac",
+            "mp4_360", "mp4_720", "mp4_1080",
+        ]
+        self.quality_combo.pack(side="left", padx=6)
+
+        ttk.Label(settings_row, text="Workers:").pack(side="left", padx=(12, 0))
+        self.conc_spin = ttk.Spinbox(settings_row, from_=1, to=3, textvariable=self.concurrency_var, width=3)
+        self.conc_spin.pack(side="left", padx=4)
+
+        ttk.Checkbutton(settings_row, text="Embed lyrics", variable=self.embed_lyrics_var).pack(side="left", padx=(12, 0))
+
         mode_row = ttk.Frame(main)
         mode_row.pack(fill="x", **pad)
         ttk.Label(mode_row, text="If duplicate found:").pack(side="left")
-        ttk.Radiobutton(mode_row, text="Warn + Skip", value="skip", variable=self.dup_mode).pack(side="left", padx=6)
-        ttk.Radiobutton(mode_row, text="Warn + Download anyway", value="force", variable=self.dup_mode).pack(side="left", padx=6)
+        ttk.Radiobutton(mode_row, text="Skip", value="skip", variable=self.dup_mode).pack(side="left", padx=6)
+        ttk.Radiobutton(mode_row, text="Download anyway", value="force", variable=self.dup_mode).pack(side="left", padx=6)
 
         action_row = ttk.Frame(main)
         action_row.pack(fill="x", **pad)
         self.download_btn = ttk.Button(action_row, text="Analyze + Download", command=self.start_download)
         self.download_btn.pack(side="left")
+        self.stop_btn = ttk.Button(action_row, text="Stop", command=self.stop_download, state="disabled")
+        self.stop_btn.pack(side="left", padx=4)
+        self.pause_btn = ttk.Button(action_row, text="Pause", command=self.pause_download, state="disabled")
+        self.pause_btn.pack(side="left", padx=4)
         ttk.Button(action_row, text="Reset Download Memory", command=self.reset_download_memory).pack(side="left", padx=8)
+        ttk.Button(action_row, text="Settings", command=self.open_settings).pack(side="left", padx=4)
         ttk.Label(action_row, textvariable=self.status_var).pack(side="left", padx=10)
 
-        self.log_box = ScrolledText(main, height=24)
+        self.log_box = ScrolledText(main, height=20)
         self.log_box.pack(fill="both", expand=True, **pad)
 
         self.log("Notes: Only download content you have rights to use.")
+
+    def _apply_theme(self):
+        theme_pref = self.cfg.get("theme", "system")
+        if theme_pref == "system":
+            return
+        style = ttk.Style(self.root)
+        available = style.theme_names()
+        if theme_pref == "dark":
+            for candidate in ("clam", "alt", "default"):
+                if candidate in available:
+                    style.theme_use(candidate)
+                    break
+        elif theme_pref == "light":
+            for candidate in ("default", "aqua", "vista"):
+                if candidate in available:
+                    style.theme_use(candidate)
+                    break
+
+    def _setup_drag_drop(self):
+        def on_drop(event):
+            text = event.data.strip()
+            urls = extract_urls_from_input(text)
+            if urls:
+                current = self.url_var.get().strip()
+                if current:
+                    self.url_var.set(current + "\n" + "\n".join(urls))
+                else:
+                    self.url_var.set("\n".join(urls))
+
+        if sys.platform == "darwin":
+            try:
+                self.url_entry.tk.eval(
+                    "package require TkDND 2.8\n"
+                    "tkdnd::drop_target register %s DND_Files" % self.url_entry._w
+                )
+                self.url_entry.bind("<<Drop>>", on_drop)
+            except Exception:
+                pass
+        elif sys.platform == "win32":
+            try:
+                self.url_entry.bind("<Button-3>", lambda e: self._context_menu(e))
+            except Exception:
+                pass
+
+    def _context_menu(self, event):
+        try:
+            import tkinter as tk
+            menu = tk.Menu(self.root, tearoff=0)
+            menu.add_command(label="Paste", command=lambda: self.url_entry.event_generate("<<Paste>>"))
+            menu.tk_popup(event.x_root, event.y_root)
+        except Exception:
+            pass
 
     def log(self, text: str):
         if threading.current_thread() is not threading.main_thread():
@@ -801,6 +1041,8 @@ class App:
             self.root.after(0, self.set_download_button, enabled)
             return
         self.download_btn.config(state="normal" if enabled else "disabled")
+        self.stop_btn.config(state="normal" if not enabled else "disabled")
+        self.pause_btn.config(state="normal" if not enabled else "disabled")
 
     def pick_output(self):
         selected = filedialog.askdirectory(initialdir=self.output_var.get())
@@ -817,11 +1059,104 @@ class App:
         self.tracker.reset_download_memory()
         self.log("Download memory reset. Duplicate history cleared.")
 
+    def open_settings(self):
+        dialog = Toplevel(self.root)
+        dialog.title("Settings")
+        dialog.geometry("420x460")
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        frame = ttk.Frame(dialog, padding=20)
+        frame.pack(fill="both", expand=True)
+
+        saved = self.cfg.load()
+
+        section_y = [0]
+        def section(title):
+            ttk.Label(frame, text=title, font=("", 11, "bold")).grid(row=section_y[0], column=0, columnspan=2, sticky="w", pady=(12 if section_y[0] else 0, 4))
+            section_y[0] += 1
+
+        def row(label_text, widget):
+            ttk.Label(frame, text=label_text).grid(row=section_y[0], column=0, sticky="w", padx=(0, 12))
+            widget.grid(row=section_y[0], column=1, sticky="w")
+            section_y[0] += 1
+
+        section("Appearance")
+        theme_var = StringVar(value=saved.get("theme", "system"))
+        row("Theme", ttk.Combobox(frame, textvariable=theme_var, values=["system", "light", "dark"], width=10, state="readonly"))
+
+        section("Downloads")
+        quality_var = StringVar(value=saved.get("quality", "mp3_320"))
+        row("Default quality", ttk.Combobox(frame, textvariable=quality_var, values=["mp3_128", "mp3_256", "mp3_320", "flac", "mp4_360", "mp4_720", "mp4_1080"], width=10, state="readonly"))
+
+        concurrency_var = IntVar(value=min(3, max(1, saved.get("concurrency", 1))))
+        row("Parallel workers", ttk.Spinbox(frame, from_=1, to=3, textvariable=concurrency_var, width=3))
+
+        dup_var = StringVar(value=saved.get("dup_mode", "skip"))
+        row("Duplicate policy", ttk.Combobox(frame, textvariable=dup_var, values=["skip", "force"], width=10, state="readonly"))
+
+        lyrics_var = BooleanVar(value=saved.get("embed_lyrics", False))
+        row("Embed lyrics", ttk.Checkbutton(frame, variable=lyrics_var))
+
+        section("Notifications")
+        notify_var = BooleanVar(value=saved.get("notifications", True))
+        row("Show completion alerts", ttk.Checkbutton(frame, variable=notify_var))
+
+        section("Updates")
+        update_var = BooleanVar(value=saved.get("check_updates", True))
+        row("Check for updates", ttk.Checkbutton(frame, variable=update_var))
+
+        def save():
+            self.cfg.set("theme", theme_var.get())
+            self.cfg.set("quality", quality_var.get())
+            self.cfg.set("concurrency", concurrency_var.get())
+            self.cfg.set("dup_mode", dup_var.get())
+            self.cfg.set("embed_lyrics", lyrics_var.get())
+            self.cfg.set("notifications", notify_var.get())
+            self.cfg.set("check_updates", update_var.get())
+            self.cfg.save()
+            self.quality_var.set(quality_var.get())
+            self.concurrency_var.set(concurrency_var.get())
+            self.embed_lyrics_var.set(lyrics_var.get())
+            self.dup_mode.set(dup_var.get())
+            dialog.destroy()
+
+        btn_frame = ttk.Frame(frame)
+        btn_frame.grid(row=section_y[0], column=0, columnspan=2, pady=(20, 0), sticky="e")
+        ttk.Button(btn_frame, text="Save", command=save).pack(side="left", padx=(0, 8))
+        ttk.Button(btn_frame, text="Cancel", command=dialog.destroy).pack(side="left")
+
+    def stop_download(self):
+        self._stop_event.set()
+        self._pause_event.set()
+        self.log("Stopping downloads...")
+
+    def pause_download(self):
+        if self._pause_event.is_set():
+            self._pause_event.clear()
+            self.pause_btn.config(text="Resume")
+            self.log("Downloads paused.")
+        else:
+            self._pause_event.set()
+            self.pause_btn.config(text="Pause")
+            self.log("Downloads resumed.")
+
+    def _save_preferences(self):
+        self.cfg.set("output_folder", self.output_var.get())
+        self.cfg.set("quality", self.quality_var.get())
+        self.cfg.set("dup_mode", self.dup_mode.get())
+        self.cfg.set("embed_lyrics", self.embed_lyrics_var.get())
+        self.cfg.set("concurrency", self.concurrency_var.get())
+        self.cfg.save()
+
     def start_download(self):
         url = self.url_var.get().strip()
         if not url:
             self.log("Please paste a URL.")
             return
+        self._save_preferences()
+        self._stop_event.clear()
+        self._pause_event.set()
         self.set_download_button(False)
         threading.Thread(target=self.run_download, args=(url,), daemon=True).start()
 
@@ -923,9 +1258,64 @@ class App:
 
         return deduped, preview
 
+    def _download_single(self, task: DownloadTask, output: Path, quality_key: str):
+        if self._stop_event.is_set():
+            return
+        self._pause_event.wait()
+
+        target = task.youtube_url
+        with yt_dlp.YoutubeDL(
+            {
+                "quiet": True,
+                "no_warnings": True,
+                "skip_download": True,
+                "noplaylist": True,
+                "nocheckcertificate": True,
+            }
+        ) as ydl:
+            info = ydl.extract_info(target, download=False)
+
+        if not info:
+            self.log(f"  Could not read metadata for {target}, skipped.")
+            return
+
+        track = make_track(info)
+        duplicate = self.tracker.check_duplicate(track)
+        if duplicate:
+            self.log(f"  Duplicate: '{track.title}' already downloaded at {duplicate['downloaded_at']}")
+            if self.dup_mode.get() == "skip":
+                self.log("  Skipped due to duplicate policy.")
+                return
+
+        if self._stop_event.is_set():
+            return
+        self._pause_event.wait()
+
+        target_output = output
+        if task.collection_name:
+            target_output = output / safe_filename(task.collection_name)
+            target_output.mkdir(parents=True, exist_ok=True)
+
+        saved_track, path = download_one(
+            target,
+            target_output,
+            self.log,
+            source_query=task.source_query,
+            quality_key=quality_key,
+        )
+        self.tracker.add_download(saved_track, path)
+
+        if self.cfg.get("embed_lyrics", False):
+            fmt = QUALITY_PRESETS.get(quality_key, QUALITY_PRESETS["mp3_320"])["format"]
+            chosen_title = task.source_query.title if task.source_query and task.source_query.title else saved_track.title
+            chosen_artist = task.source_query.artist if task.source_query and task.source_query.artist else saved_track.artist
+            embed_lyrics_if_available(Path(path), chosen_title, chosen_artist, fmt=fmt)
+
     def run_download(self, raw_input: str):
         output = Path(self.output_var.get()).expanduser()
         output.mkdir(parents=True, exist_ok=True)
+        quality_key = self.quality_var.get()
+        workers = min(3, max(1, self.concurrency_var.get()))
 
         self.set_status("Analyzing link...")
         try:
@@ -937,12 +1327,15 @@ class App:
                 return
 
             all_tasks = []
-            all_preview = []
             for idx, one_url in enumerate(input_urls, start=1):
+                if self._stop_event.is_set():
+                    self.log("Stopped during analysis.")
+                    self.set_status("Ready")
+                    self.set_download_button(True)
+                    return
                 self.log(f"[{idx}/{len(input_urls)}] Resolving {one_url}")
-                tasks, preview = self.resolve_targets(one_url)
+                tasks, _preview = self.resolve_targets(one_url)
                 all_tasks.extend(tasks)
-                all_preview.extend(preview)
 
             if not all_tasks:
                 self.log("No downloadable items found.")
@@ -950,7 +1343,6 @@ class App:
                 self.set_download_button(True)
                 return
 
-            # Global de-dup by final YouTube URL across mixed inputs.
             deduped = []
             seen_urls = set()
             for task in all_tasks:
@@ -968,7 +1360,6 @@ class App:
                 self.set_download_button(True)
                 return
 
-            # Use edited URLs while preserving metadata when URL is unchanged.
             task_by_url = {t.youtube_url: t for t in deduped}
             final_tasks = []
             seen_final = set()
@@ -980,64 +1371,70 @@ class App:
 
             downloaded = 0
             skipped = 0
+            total = len(final_tasks)
 
-            for index, task in enumerate(final_tasks, start=1):
-                target = task.youtube_url
-                self.set_status(f"Downloading {index}/{len(final_tasks)}")
-                self.log(f"[{index}/{len(final_tasks)}] Checking {target}")
+            if workers > 1:
+                with ThreadPoolExecutor(max_workers=workers) as executor:
+                    futures = {}
+                    for task in final_tasks:
+                        if self._stop_event.is_set():
+                            break
+                        future = executor.submit(self._download_single, task, output, quality_key)
+                        futures[future] = task
+                        self.set_status(f"Downloading {len(futures)}/{total}...")
 
-                with yt_dlp.YoutubeDL(
-                    {
-                        "quiet": True,
-                        "no_warnings": True,
-                        "skip_download": True,
-                        "noplaylist": True,
-                        "nocheckcertificate": True,
-                    }
-                ) as ydl:
-                    info = ydl.extract_info(target, download=False)
-
-                if not info:
-                    self.log("  Could not read metadata, skipped.")
-                    skipped += 1
-                    continue
-
-                track = make_track(info)
-                duplicate = self.tracker.check_duplicate(track)
-                if duplicate:
-                    self.log(
-                        f"  Duplicate warning: '{track.title}' already downloaded at {duplicate['downloaded_at']}"
-                    )
-                    if self.dup_mode.get() == "skip":
-                        self.log("  Skipped due to duplicate policy.")
+                    for future in as_completed(futures):
+                        if self._stop_event.is_set():
+                            break
+                        try:
+                            result = future.result()
+                            if result:
+                                downloaded += 1
+                            else:
+                                skipped += 1
+                        except Exception as e:
+                            self.log(f"  Failed: {e}")
+                            skipped += 1
+            else:
+                for index, task in enumerate(final_tasks, start=1):
+                    if self._stop_event.is_set():
+                        self.log("Downloads stopped by user.")
+                        break
+                    self._pause_event.wait()
+                    self.set_status(f"Downloading {index}/{total}")
+                    try:
+                        self._download_single(task, output, quality_key)
+                        downloaded += 1
+                    except Exception:
                         skipped += 1
-                        continue
-
-                try:
-                    target_output = output
-                    if task.collection_name:
-                        target_output = output / safe_filename(task.collection_name)
-                        target_output.mkdir(parents=True, exist_ok=True)
-                    saved_track, path = download_one(
-                        target,
-                        target_output,
-                        self.log,
-                        source_query=task.source_query,
-                    )
-                    self.tracker.add_download(saved_track, path)
-                    downloaded += 1
-                except Exception as e:
-                    self.log(f"  Failed: {e}")
-                    skipped += 1
 
             self.log(f"Done. Downloaded: {downloaded}, skipped/failed: {skipped}")
             self.set_status("Ready")
+            if self.cfg.get("notifications", True):
+                notify("Download Complete", f"{downloaded} tracks saved. {skipped} skipped/failed.")
 
         except Exception as e:
             self.log(f"Error: {e}")
             self.set_status("Ready")
         finally:
             self.set_download_button(True)
+
+    def _check_updates(self):
+        if not self.cfg.get("check_updates", True):
+            return
+        def check():
+            latest = check_for_updates()
+            if latest:
+                self.root.after(0, lambda: self._prompt_update(latest))
+        threading.Thread(target=check, daemon=True).start()
+
+    def _prompt_update(self, latest: str):
+        if messagebox.askyesno(
+            "Update Available",
+            f"Version {latest} is available. Open the download page?",
+        ):
+            import webbrowser
+            webbrowser.open(f"{GITHUB_REPO_URL}/releases")
 
 
 def main():
