@@ -73,6 +73,23 @@ def _build_download_opts(output_dir, quality_key):
 
 class DownloaderAPI:
     def __init__(self):
+        # Initialize Spotify client if credentials are set
+        self.spotify_client = None
+        spotify_id = self.config.get("spotify_client_id", "")
+        spotify_secret = self.config.get("spotify_client_secret", "")
+        if spotify_id and spotify_secret:
+            try:
+                import spotipy
+                from spotipy.oauth2 import SpotifyClientCredentials
+                client_credentials_manager = SpotifyClientCredentials(
+                    client_id=spotify_id,
+                    client_secret=spotify_secret
+                )
+                self.spotify_client = spotipy.Spotify(
+                    client_credentials_manager=client_credentials_manager
+                )
+            except Exception:
+                self.spotify_client = None
         self.window = None
         self.tracker = DownloadTracker(DB_PATH)
         self.config = Config(app_data_dir() / "config.json")
@@ -193,13 +210,17 @@ class DownloaderAPI:
             "check_updates": saved.get("check_updates", True),
             "dup_mode": saved.get("dup_mode", "skip"),
             "theme": saved.get("theme", "system"),
+            "spotify_client_id": saved.get("spotify_client_id", ""),
+            "spotify_client_secret": saved.get("spotify_client_secret", ""),
         }
 
     def save_settings(self, settings: dict):
+        if "theme" in settings:
+            self.theme = settings["theme"]
+            self.config.set("theme", self.theme)
         if "quality" in settings:
-            self.config.set("quality", settings["quality"])
-            with self._state_lock:
-                self.quality_key = settings["quality"]
+            self.quality_key = settings["quality"]
+            self.config.set("quality", self.quality_key)
         if "concurrency" in settings:
             val = min(3, max(1, int(settings["concurrency"])))
             self.config.set("concurrency", val)
@@ -209,24 +230,21 @@ class DownloaderAPI:
             self.config.set("embed_lyrics", bool(settings["embed_lyrics"]))
             with self._state_lock:
                 self.embed_lyrics = bool(settings["embed_lyrics"])
+        if "dup_mode" in settings:
+            self.config.set("dup_mode", settings["dup_mode"])
+            with self._state_lock:
+                self.dup_mode = settings["dup_mode"]
         if "notifications" in settings:
             self.config.set("notifications", bool(settings["notifications"]))
             with self._state_lock:
                 self.notifications = bool(settings["notifications"])
         if "check_updates" in settings:
             self.config.set("check_updates", bool(settings["check_updates"]))
-        if "dup_mode" in settings:
-            mode = settings["dup_mode"]
-            if mode in ("skip", "force"):
-                self.config.set("dup_mode", mode)
-                with self._state_lock:
-                    self.dup_mode = mode
-        if "theme" in settings:
-            theme = settings["theme"]
-            if theme in ("system", "dark", "light"):
-                self.config.set("theme", theme)
-                with self._state_lock:
-                    self.theme = theme
+        # Spotify credentials
+        spotify_id = settings.get("spotify_client_id", "").strip()
+        spotify_secret = settings.get("spotify_client_secret", "").strip()
+        self.config.set("spotify_client_id", spotify_id)
+        self.config.set("spotify_client_secret", spotify_secret)
         self.config.save()
         return True
 
@@ -313,11 +331,53 @@ class DownloaderAPI:
 
         self._log("Detected non-YouTube link. Parsing track metadata...")
         
+        # Check if Spotify and credentials are configured
+        if 'spotify.com' in url:
+            spotify_id = self.config.get("spotify_client_id", "")
+            spotify_secret = self.config.get("spotify_client_secret", "")
+            if not spotify_id or not spotify_secret:
+                self._log("⚠️ Spotify credentials not configured. See Settings > Spotify API.")
+                self._log("   Get free API keys from: https://developer.spotify.com/dashboard")
+                return tasks
+        
+        queries, collection_name = extract_music_queries(url, config=self.config)
+        
+        if not queries:
+            self._log("❌ No tracks found. Try using YouTube URLs instead.")
+            return tasks
+        
+        for idx, q in enumerate(queries, start=1):
+            # Skip Spotify tracks with empty URLs (credentials missing)
+            if not q.source_url and 'spotify.com' in url:
+                self._log(f"  ⚠️ Skipping Spotify track: {q.title}")
+                continue
+            
+            self._status(f"Searching YouTube {idx}/{len(queries)}")
+            yt_url = pick_youtube_for_query(q)
+            if not yt_url:
+                self._log(f"  No YouTube match found: {q.artist} - {q.title}")
+                continue
+            title = safe_filename(clean_song_title(q.title, q.artist)) or "Unknown Title"
+            group = safe_filename(collection_name) if collection_name else title
+            tasks.append(
+                DownloadTask(
+                    youtube_url=yt_url,
+                    source_input_url=url,
+                    source_query=q,
+                    collection_name=collection_name,
+                    display_title=title,
+                    group_name=group,
+                )
+            )
+        return tasks
+
+        self._log("Detected non-YouTube link. Parsing track metadata...")
+        
         # Warn about Spotify limitations
         if 'spotify.com' in url:
             self._log("⚠️ Spotify direct downloads not supported. Use YouTube URLs for best results.")
         
-        queries, collection_name = extract_music_queries(url)
+        queries, collection_name = extract_music_queries(url, config=self.config)
         
         # Filter out Spotify tracks with no URL
         if 'spotify.com' in url:

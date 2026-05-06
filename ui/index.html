@@ -453,6 +453,20 @@
           </label>
         </div>
       </div>
+      <div class="settings-section">
+        <h4>Spotify API (Free)</h4>
+        <p style="font-size:12px;color:#888;margin:-8px 0 12px 0;">
+          Get free API keys from <a href="https://developer.spotify.com/dashboard" target="_blank">Spotify Developer Dashboard</a> (takes 30 seconds)
+        </p>
+        <div class="setting-row">
+          <label>Client ID</label>
+          <input type="text" id="settingsSpotifyId" placeholder="Paste your Client ID">
+        </div>
+        <div class="setting-row">
+          <label>Client Secret</label>
+          <input type="text" id="settingsSpotifySecret" placeholder="Paste your Client Secret">
+        </div>
+      </div>
       <div class="action-row" style="justify-content:flex-end; margin-top: 10px;">
         <button class="btn secondary" id="cancelSettingsBtn">Cancel</button>
         <button class="btn" id="saveSettingsBtn">Save</button>
@@ -491,6 +505,8 @@
       settingsDup: document.getElementById("settingsDup"),
       settingsNotifications: document.getElementById("settingsNotifications"),
       settingsUpdates: document.getElementById("settingsUpdates"),
+      settingsSpotifyId: document.getElementById("settingsSpotifyId"),
+      settingsSpotifySecret: document.getElementById("settingsSpotifySecret"),
       cancelSettingsBtn: document.getElementById("cancelSettingsBtn"),
       saveSettingsBtn: document.getElementById("saveSettingsBtn"),
     };
@@ -660,6 +676,8 @@
       els.settingsDup.value = s.dup_mode || "skip";
       els.settingsNotifications.checked = s.notifications !== false;
       els.settingsUpdates.checked = s.check_updates !== false;
+      els.settingsSpotifyId.value = s.spotify_client_id || "";
+      els.settingsSpotifySecret.value = s.spotify_client_secret || "";
       els.settingsModal.classList.add("show");
     }
 
@@ -677,6 +695,8 @@
         dup_mode: els.settingsDup.value,
         notifications: els.settingsNotifications.checked,
         check_updates: els.settingsUpdates.checked,
+        spotify_client_id: els.settingsSpotifyId.value.trim(),
+        spotify_client_secret: els.settingsSpotifySecret.value.trim(),
       });
       applyTheme(els.settingsTheme.value);
       closeSettings();

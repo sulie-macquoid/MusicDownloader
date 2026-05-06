@@ -67,6 +67,8 @@ CONFIG_PATH = app_data_dir() / "config.json"
 YOUTUBE_HOST_MARKERS = ("youtube.com", "youtu.be", "music.youtube.com")
 REPO_URL = "https://api.github.com/repos/sulie-macquoid/MusicDownloader/releases/latest"
 GITHUB_REPO_URL = "https://github.com/sulie-macquoid/MusicDownloader"
+SPOTIFY_CLIENT_ID = "your_spotify_client_id_here"  # Get free from https://developer.spotify.com/dashboard
+SPOTIFY_CLIENT_SECRET = "your_spotify_client_secret_here"
 CURRENT_VERSION = "1.1.0"
 
 
@@ -258,66 +260,201 @@ def extract_meta_value(html: str, key: str, prop: bool = False):
     return unescape(match.group(1)).strip() if match else ""
 
 
-def extract_spotify_track_query(track_url: str, html: str = ""):
-    # Try HTML scraping first (for playlists/albums)
-    if html:
-        title = extract_meta_value(html, "og:title", prop=True)
-        artist = extract_meta_value(html, "music:musician_description")
-        release_date = extract_meta_value(html, "music:release_date")
-        artwork_url = extract_meta_value(html, "og:image", prop=True)
-        if title:
-            return MusicQuery(
-                title=title,
-                artist=artist,
-                source_url=track_url,
-                release_date=release_date,
-                artwork_url=artwork_url,
-            )
+def extract_spotify_track_query(track_url: str, html: str = "", spotify_client=None):
+    """Extract track info from Spotify and create YouTube search query.
     
-    # For individual tracks, return a placeholder
-    # Note: yt-dlp cannot download Spotify URLs directly due to DRM protection
-    # Users should use YouTube URLs for best results
-    match = re.search(r'/track/([a-zA-Z0-9]+)', track_url)
-    if match:
+    Args:
+        spotify_client: Optional spotipy.Spotify client (if None, will skip API call)
+    """
+    import requests
+    from bs4 import BeautifulSoup
+    
+    title = ""
+    artist = ""
+    
+    # Method 1: Use Spotify API if client is provided
+    if spotify_client:
+        match = re.search(r'/track/([a-zA-Z0-9]+)', track_url)
+        if match:
+            try:
+                track_id = match.group(1)
+                track = spotify_client.track(track_id)
+                title = track.get('name', '')
+                artist = track.get('artists', [{}])[0].get('name', '')
+            except Exception:
+                pass
+    
+    # Method 2: Try to scrape the page for og:title
+    if not title:
+        try:
+            if not html:
+                headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
+                response = requests.get(track_url, headers=headers, timeout=10)
+                if response.status_code == 200:
+                    html = response.text
+            
+            if html:
+                soup = BeautifulSoup(html, 'html.parser')
+                og_title = soup.find('meta', property='og:title')
+                if og_title:
+                    title_artist = og_title.get('content', '')
+                    if ' - ' in title_artist:
+                        parts = title_artist.split(' - ', 1)
+                        title = parts[0].strip()
+                        artist = parts[1].strip()
+        except Exception:
+            pass
+    
+    if title and artist:
+        # Create YouTube search query (yt-dlp supports ytsearch1:)
+        search_query = f"ytsearch1:{title} {artist}"
         return MusicQuery(
-            title="[Spotify Track - Convert to YouTube]",
-            artist="Unknown",
-            source_url="",  # Empty URL will cause skip with warning
+            title=title,
+            artist=artist,
+            source_url=search_query,
         )
+    
     return None
 
 
-def extract_spotify_queries(url: str):
+def extract_spotify_queries(url: str, spotify_client=None, config=None):
+    """Extract all tracks from Spotify URL (track, playlist, album)."""
+    import requests
+    from bs4 import BeautifulSoup
+    
+    # If we have a Spotify client, use it
+    if spotify_client:
+        return _extract_spotify_with_api(url, spotify_client)
+    
+    # Otherwise, try web scraping
     page = fetch_text(url)
     if not page:
         return [], ""
     path = (urlparse(url).path or "").lower()
     
-    # For individual tracks, return a query that will show warning
+    # For individual tracks
     if "/track/" in path:
         q = extract_spotify_track_query(url, html=page)
         return ([q] if q else []), ""
     
-    # For playlists/albums, try to extract track URLs
-    track_urls = re.findall(
-        r'<meta name="music:song" content="(https://open\.spotify\.com/track/[^"]+)"',
-        page,
-        flags=re.IGNORECASE,
-    )
-    track_urls = list(dict.fromkeys(track_urls))[:200]
+    # For playlists/albums: extract track IDs from JSON data in page
+    queries = []
+    collection_name = ""
+    
+    try:
+        soup = BeautifulSoup(page, 'html.parser')
+        # Find JSON data containing track list
+        for script in soup.find_all('script', type='application/ld+json'):
+            if script.string:
+                import json
+                try:
+                    data = json.loads(script.string)
+                    # Handle playlist/album structure
+                    if isinstance(data, dict):
+                        if data.get('@type') == 'MusicPlaylist':
+                            collection_name = data.get('name', '')
+                            # Extract track URLs
+                            for track in data.get('track', [])[:200]:
+                                track_url = track.get('url', '')
+                                if 'spotify.com/track/' in track_url:
+                                    q = extract_spotify_track_query(track_url)
+                                    if q:
+                                        queries.append(q)
+                except json.JSONDecodeError:
+                    continue
+    except Exception:
+        pass
+    
+    # Fallback: extract track URLs from meta tags
+    if not queries:
+        track_urls = re.findall(
+            r'<meta name="music:song" content="(https://open\.spotify\.com/track/[^"]+)"',
+            page,
+            flags=re.IGNORECASE,
+        )
+        track_urls = list(dict.fromkeys(track_urls))[:200]
+        for t_url in track_urls:
+            try:
+                q = extract_spotify_track_query(t_url)
+                if q:
+                    queries.append(q)
+            except Exception:
+                continue
+    
+    # Get collection name for playlists/albums
+    if not collection_name and ("/playlist/" in path or "/album/" in path):
+        collection_name = extract_meta_value(page, "og:title", prop=True)
+    
+    return queries, collection_name
+
+
+def _extract_spotify_with_api(url: str, spotify_client):
+    """Extract tracks using Spotify API."""
+    import re
     
     queries = []
-    for t_url in track_urls:
-        try:
-            q = extract_spotify_track_query(t_url)
-            if q:
-                queries.append(q)
-        except Exception:
-            continue
-    
     collection_name = ""
-    if "/playlist/" in path or "/album/" in path:
-        collection_name = extract_meta_value(page, "og:title", prop=True)
+    
+    try:
+        # Extract ID from URL
+        track_match = re.search(r'/track/([a-zA-Z0-9]+)', url)
+        album_match = re.search(r'/album/([a-zA-Z0-9]+)', url)
+        playlist_match = re.search(r'/playlist/([a-zA-Z0-9]+)', url)
+        
+        if track_match:
+            # Single track
+            track_id = track_match.group(1)
+            track = spotify_client.track(track_id)
+            title = track.get('name', '')
+            artist = track.get('artists', [{}])[0].get('name', '')
+            if title and artist:
+                search_query = f"ytsearch1:{title} {artist}"
+                queries.append(MusicQuery(
+                    title=title,
+                    artist=artist,
+                    source_url=search_query,
+                ))
+        
+        elif album_match:
+            # Album
+            album_id = album_match.group(1)
+            album = spotify_client.album(album_id)
+            collection_name = album.get('name', '')
+            tracks = spotify_client.album_tracks(album_id)
+            for track in tracks['items'][:200]:
+                title = track.get('name', '')
+                artist = track.get('artists', [{}])[0].get('name', '')
+                if title and artist:
+                    search_query = f"ytsearch1:{title} {artist}"
+                    queries.append(MusicQuery(
+                        title=title,
+                        artist=artist,
+                        source_url=search_query,
+                        album=collection_name,
+                    ))
+        
+        elif playlist_match:
+            # Playlist
+            playlist_id = playlist_match.group(1)
+            playlist = spotify_client.playlist(playlist_id)
+            collection_name = playlist.get('name', '')
+            tracks = spotify_client.playlist_tracks(playlist_id)
+            for item in tracks['items'][:200]:
+                track = item.get('track')
+                if track:
+                    title = track.get('name', '')
+                    artist = track.get('artists', [{}])[0].get('name', '')
+                    if title and artist:
+                        search_query = f"ytsearch1:{title} {artist}"
+                        queries.append(MusicQuery(
+                            title=title,
+                            artist=artist,
+                            source_url=search_query,
+                            album=collection_name,
+                        ))
+    
+    except Exception as e:
+        print(f"Spotify API error: {e}")
     
     return queries, collection_name
 

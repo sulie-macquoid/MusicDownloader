@@ -24,6 +24,8 @@ DEFAULTS = {
     "check_updates": True,
     "notifications": True,
     "theme": "system",
+    "spotify_client_id": "",
+    "spotify_client_secret": "",
 }
 
 QUALITY_PRESETS = {

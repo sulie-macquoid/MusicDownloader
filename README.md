@@ -13,8 +13,9 @@ Free desktop app that:
 - Auto-update checker with one-click update link
 - Desktop app (.app on macOS, .bat on Windows) with auto-setup
 
-## New Features (v1.0.0)
+## New Features (v1.1.0)
 
+- **Spotify support**: Download from Spotify (requires free API credentials - see below)
 - **Quality selector**: Choose MP3 (128/256/320), FLAC, or MP4 (360/720/1080p) in Settings
 - **Concurrent downloads**: Set 1-3 workers for faster batch downloads
 - **Lyrics embedding**: Auto-fetch and embed lyrics (toggle in Settings)
@@ -25,6 +26,15 @@ Free desktop app that:
 - **Theme support**: System/Dark/Light theme options
 - **macOS desktop app**: One-click `.app` builder with automatic updates
 - **Windows support**: Full PowerShell setup with desktop shortcut
+
+### Setting up Spotify (Free - 30 seconds)
+
+1. Go to https://developer.spotify.com/dashboard
+2. Create an app (any name, description)
+3. Copy your **Client ID** and **Client Secret**
+4. Open the app → Settings → Spotify API
+5. Paste your credentials and click Save
+6. Now paste any Spotify track, album, or playlist URL!
 
 ## Important
 
