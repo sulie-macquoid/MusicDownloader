@@ -1,4 +1,4 @@
-# sully's music downloader
+# Sully's Music Downloader
 
 Free desktop app that:
 - Accepts YouTube / YouTube Music / Spotify / Apple Music / mixed links.
@@ -11,56 +11,111 @@ Free desktop app that:
 - Supports queueing and stop-download control.
 
 ## Important
+
 Only download content you have rights to use.
 
-## Quick Start (macOS, local dev)
+## Requirements
+
+- Python 3.11+
+- [ffmpeg](https://ffmpeg.org/) (required for audio extraction and format conversion)
+
+## Quick Start
+
+### macOS
+
 ```bash
-cd "/Users/sulie/Documents/Music downloader"
+# Clone the repo
+git clone https://github.com/sulie-macquoid/MusicDownloader.git
+cd MusicDownloader
+
+# Set up virtual environment
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+
+# Install ffmpeg
 brew install ffmpeg
-python app_webview.py
+
+# Run the app
+python launcher.py
 ```
 
-## Build macOS .app
-```bash
-cd "/Users/sulie/Documents/Music downloader"
-source .venv/bin/activate
-./build_macos_app.sh
-```
-Output:
-- `dist/sully's music downloader.app` (name comes from bundle metadata)
+### Windows
 
-## Build Windows .exe
-From Windows PowerShell:
 ```powershell
+# Clone the repo
+git clone https://github.com/sulie-macquoid/MusicDownloader.git
+cd MusicDownloader
+
+# Set up virtual environment
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-pip install pyinstaller
-pyinstaller --name "sully's music downloader" --noconfirm --windowed --onefile launcher.py
+
+# Install ffmpeg (add to PATH)
+# https://ffmpeg.org/download.html
+
+# Run the app
+python launcher.py
 ```
-Output:
-- `dist\sully's music downloader.exe`
 
-Note:
-- Keep `ui/index.html` bundled if switching to one-folder mode.
-- For reliable ffmpeg usage on Windows, install ffmpeg and add to PATH.
+### Linux
 
-## One-line installers (for GitHub releases)
-After publishing releases, friends can install with:
-- macOS:
 ```bash
-curl -fsSL https://raw.githubusercontent.com/<OWNER>/<REPO>/main/scripts/install-macos.sh | bash
+git clone https://github.com/sulie-macquoid/MusicDownloader.git
+cd MusicDownloader
+
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+
+# Install ffmpeg (Debian/Ubuntu)
+sudo apt install ffmpeg
+
+# Run the app
+python launcher.py
 ```
-- Windows (PowerShell):
+
+## Build Standalone App
+
+### macOS (.app)
+
+```bash
+cd MusicDownloader
+source .venv/bin/activate
+./build_macos_app.sh
+```
+
+Output: `dist/Sully's Music Downloader.app`
+
+### Windows (.exe)
+
 ```powershell
-iwr https://raw.githubusercontent.com/<OWNER>/<REPO>/main/scripts/install-windows.ps1 -UseBasicParsing | iex
+cd MusicDownloader
+.venv\Scripts\Activate.ps1
+pip install pyinstaller
+pyinstaller --name "Sully's Music Downloader" --noconfirm --windowed --onefile launcher.py
 ```
 
-## Packaging + Publish Guide
-See:
-- `docs/PUBLISHING.md`
+Output: `dist\Sully's Music Downloader.exe`
 
-# MusicDownloader
+> **Note:** Keep `ui/index.html` bundled if switching to one-folder mode.
+> For reliable ffmpeg usage on Windows, install ffmpeg and add it to your PATH.
+
+## One-Line Installers
+
+After publishing releases, users can install with:
+
+**macOS:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/sulie-macquoid/MusicDownloader/main/scripts/install-macos.sh | bash
+```
+
+**Windows (PowerShell):**
+```powershell
+iwr https://raw.githubusercontent.com/sulie-macquoid/MusicDownloader/main/scripts/install-windows.ps1 -UseBasicParsing | iex
+```
+
+## Publishing Guide
+
+See [docs/PUBLISHING.md](docs/PUBLISHING.md) for detailed packaging and release instructions.

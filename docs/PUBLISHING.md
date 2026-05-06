@@ -4,7 +4,6 @@
 1. Create a new GitHub repository (recommended name: `sullys-music-downloader`).
 2. In project folder:
 ```bash
-cd "/Users/sulie/Documents/Music downloader"
 git init
 git add .
 git commit -m "Initial release: sully's music downloader"
@@ -21,7 +20,7 @@ source .venv/bin/activate
 ./build_macos_app.sh
 ```
 Artifact to upload:
-- `dist/sully's music downloader.app` (zip it first for upload)
+- `dist/Sully's Music Downloader.app` (zip it first for upload)
 
 ### Windows `.exe`
 On Windows machine:
@@ -30,10 +29,10 @@ python -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 pip install pyinstaller
-pyinstaller --name "sully's music downloader" --noconfirm --windowed --onefile launcher.py
+pyinstaller --name "Sully's Music Downloader" --noconfirm --windowed --onefile launcher.py
 ```
 Artifact to upload:
-- `dist\sully's music downloader.exe`
+- `dist\Sully's Music Downloader.exe`
 
 ## 3) Create a GitHub Release
 1. Go to GitHub repo -> `Releases` -> `Draft a new release`.
@@ -57,4 +56,3 @@ curl -fsSL https://raw.githubusercontent.com/<OWNER>/<REPO>/main/scripts/install
 ```powershell
 iwr https://raw.githubusercontent.com/<OWNER>/<REPO>/main/scripts/install-windows.ps1 -UseBasicParsing | iex
 ```
-
