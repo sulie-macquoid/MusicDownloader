@@ -1,12 +1,14 @@
 from setuptools import setup
 
 APP = ['launcher.py']
-DATA_FILES = [('ui', ['ui/index.html'])]
+DATA_FILES = [
+    ('ui', ['ui/index.html']),
+    ('', ['app.py', 'app_webview.py', 'config.py']),
+]
 OPTIONS = {
     'argv_emulation': False,
     'iconfile': None,
-    'packages': ['webview', 'customtkinter', 'yt_dlp', 'mutagen'],
-    'includes': ['app', 'app_webview', 'app_tk_pro', 'app_ctk'],
+    'packages': ['webview', 'yt_dlp', 'mutagen', 'certifi'],
     'plist': {
         'CFBundleName': "Sully's Music Downloader",
         'CFBundleDisplayName': "Sully's Music Downloader",

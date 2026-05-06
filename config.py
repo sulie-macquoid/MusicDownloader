@@ -1,10 +1,23 @@
 import json
 from pathlib import Path
+import os
+import sys
+
+
+def app_data_dir() -> Path:
+    if sys.platform == "darwin":
+        root = Path.home() / "Library" / "Application Support" / "sully's music downloader"
+    elif sys.platform == "win32":
+        root = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / "sully's music downloader"
+    else:
+        root = Path.home() / ".sullys-music-downloader"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
 
 DEFAULTS = {
     "output_folder": "",
     "quality": "mp3_320",
-    "format": "mp3",
     "dup_mode": "skip",
     "concurrency": 1,
     "embed_lyrics": False,
@@ -21,6 +34,16 @@ QUALITY_PRESETS = {
     "mp4_360": {"format": "mp4", "resolution": "360"},
     "mp4_720": {"format": "mp4", "resolution": "720"},
     "mp4_1080": {"format": "mp4", "resolution": "1080"},
+}
+
+QUALITY_LABELS = {
+    "mp3_128": "MP3 128kbps",
+    "mp3_256": "MP3 256kbps",
+    "mp3_320": "MP3 320kbps",
+    "flac": "FLAC Lossless",
+    "mp4_360": "MP4 360p",
+    "mp4_720": "MP4 720p",
+    "mp4_1080": "MP4 1080p",
 }
 
 

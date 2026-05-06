@@ -20,18 +20,72 @@ from app import (
     make_track,
     pick_youtube_for_query,
     safe_filename,
+    detect_ffmpeg_location,
+    embed_lyrics_if_available,
+    notify,
+    check_for_updates,
+    CURRENT_VERSION,
+    GITHUB_REPO_URL,
 )
+from config import Config, QUALITY_PRESETS, QUALITY_LABELS, app_data_dir
+
+# Inline _build_download_opts to avoid import issues
+from pathlib import Path as _Path
+
+def _build_download_opts(output_dir, quality_key):
+    output_dir = _Path(output_dir)
+    preset = QUALITY_PRESETS.get(quality_key, QUALITY_PRESETS["mp3_320"])
+    fmt = preset["format"]
+    opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": True,
+        "nocheckcertificate": True,
+        "writethumbnail": fmt in ("mp3", "flac"),
+        "addmetadata": True,
+        "outtmpl": str(output_dir / "__tmp__%(id)s.%(ext)s"),
+    }
+    if fmt == "mp3":
+        bitrate = preset.get("bitrate", "320")
+        opts["format"] = "bestaudio/best"
+        opts["postprocessors"] = [
+            {"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": bitrate},
+            {"key": "FFmpegMetadata"},
+            {"key": "EmbedThumbnail"},
+        ]
+    elif fmt == "flac":
+        opts["format"] = "bestaudio/best"
+        opts["postprocessors"] = [
+            {"key": "FFmpegExtractAudio", "preferredcodec": "flac", "preferredquality": "0"},
+            {"key": "FFmpegMetadata"},
+            {"key": "EmbedThumbnail"},
+        ]
+    elif fmt == "mp4":
+        resolution = preset.get("resolution", "720")
+        opts["format"] = f"bestvideo[height<={resolution}]+bestaudio/best[height<={resolution}]/best"
+        opts["merge_output_format"] = "mp4"
+        opts["postprocessors"] = [{"key": "FFmpegMetadata"}]
+    ffmpeg_location = detect_ffmpeg_location()
+    if ffmpeg_location:
+        opts["ffmpeg_location"] = ffmpeg_location
+    return opts, fmt
 
 
 class DownloaderAPI:
     def __init__(self):
         self.window = None
         self.tracker = DownloadTracker(DB_PATH)
+        self.config = Config(app_data_dir() / "config.json")
 
         self._state_lock = threading.Lock()
-        self.output_dir = str(Path.home() / "Music" / "sully's music downloader")
-        self.dup_mode = "skip"
-        self.output_format = "mp3"
+        saved = self.config.load()
+        self.output_dir = saved.get("output_folder", "") or str(Path.home() / "Music" / "sully's music downloader")
+        self.dup_mode = saved.get("dup_mode", "skip")
+        self.quality_key = saved.get("quality", "mp3_320")
+        self.concurrency = min(3, max(1, saved.get("concurrency", 1)))
+        self.embed_lyrics = saved.get("embed_lyrics", False)
+        self.notifications = saved.get("notifications", True)
+        self.theme = saved.get("theme", "system")
 
         self.download_queue = deque()
         self.download_lock = threading.Lock()
@@ -42,6 +96,7 @@ class DownloaderAPI:
         self.group_order = []
         self.active_group = ""
         self.active_title = ""
+        self.active_downloads = 0
 
         self.preview_cache = {}
 
@@ -77,6 +132,15 @@ class DownloaderAPI:
             running = self.download_running
         self._emit("download_state", {"running": running})
 
+    def _progress_event(self, fmt: str, idx: int, total: int, progress: float, title: str):
+        self._emit("progress", {
+            "format": fmt,
+            "index": idx,
+            "total": total,
+            "progress": progress,
+            "title": title,
+        })
+
     def _queue_snapshot(self):
         with self.download_lock:
             groups = []
@@ -111,10 +175,66 @@ class DownloaderAPI:
 
     def get_initial_state(self):
         with self._state_lock:
-            out = self.output_dir
-            dup = self.dup_mode
-            fmt = self.output_format
-        return {"output_dir": out, "dup_mode": dup, "output_format": fmt}
+            return {
+                "output_dir": self.output_dir,
+                "dup_mode": self.dup_mode,
+                "quality": self.quality_key,
+                "concurrency": self.concurrency,
+                "embed_lyrics": self.embed_lyrics,
+            }
+
+    def get_settings(self):
+        saved = self.config.load()
+        return {
+            "quality": saved.get("quality", "mp3_320"),
+            "concurrency": saved.get("concurrency", 1),
+            "embed_lyrics": saved.get("embed_lyrics", False),
+            "notifications": saved.get("notifications", True),
+            "check_updates": saved.get("check_updates", True),
+            "dup_mode": saved.get("dup_mode", "skip"),
+            "theme": saved.get("theme", "system"),
+        }
+
+    def save_settings(self, settings: dict):
+        if "quality" in settings:
+            self.config.set("quality", settings["quality"])
+            with self._state_lock:
+                self.quality_key = settings["quality"]
+        if "concurrency" in settings:
+            val = min(3, max(1, int(settings["concurrency"])))
+            self.config.set("concurrency", val)
+            with self._state_lock:
+                self.concurrency = val
+        if "embed_lyrics" in settings:
+            self.config.set("embed_lyrics", bool(settings["embed_lyrics"]))
+            with self._state_lock:
+                self.embed_lyrics = bool(settings["embed_lyrics"])
+        if "notifications" in settings:
+            self.config.set("notifications", bool(settings["notifications"]))
+            with self._state_lock:
+                self.notifications = bool(settings["notifications"])
+        if "check_updates" in settings:
+            self.config.set("check_updates", bool(settings["check_updates"]))
+        if "dup_mode" in settings:
+            mode = settings["dup_mode"]
+            if mode in ("skip", "force"):
+                self.config.set("dup_mode", mode)
+                with self._state_lock:
+                    self.dup_mode = mode
+        if "theme" in settings:
+            theme = settings["theme"]
+            if theme in ("system", "dark", "light"):
+                self.config.set("theme", theme)
+                with self._state_lock:
+                    self.theme = theme
+        self.config.save()
+        return True
+
+    def check_update(self):
+        latest = check_for_updates()
+        if latest:
+            return {"available": True, "version": latest, "url": f"{GITHUB_REPO_URL}/releases"}
+        return {"available": False}
 
     def browse_output_folder(self):
         if not self.window:
@@ -125,6 +245,8 @@ class DownloaderAPI:
         folder = chosen[0]
         with self._state_lock:
             self.output_dir = folder
+        self.config.set("output_folder", folder)
+        self.config.save()
         self._status(f"Output folder set: {folder}")
         return folder
 
@@ -134,6 +256,8 @@ class DownloaderAPI:
             return False
         with self._state_lock:
             self.output_dir = folder
+        self.config.set("output_folder", folder)
+        self.config.save()
         return True
 
     def set_duplicate_mode(self, mode: str):
@@ -141,14 +265,26 @@ class DownloaderAPI:
             return False
         with self._state_lock:
             self.dup_mode = mode
+        self.config.set("dup_mode", mode)
+        self.config.save()
         return True
 
-    def set_output_format(self, output_format: str):
-        output_format = (output_format or "").lower()
-        if output_format not in ("mp3", "mp4"):
+    def set_quality(self, quality: str):
+        from config import QUALITY_PRESETS
+        if quality not in QUALITY_PRESETS:
             return False
         with self._state_lock:
-            self.output_format = output_format
+            self.quality_key = quality
+        self.config.set("quality", quality)
+        self.config.save()
+        return True
+
+    def set_concurrency(self, n: int):
+        n = min(3, max(1, int(n)))
+        with self._state_lock:
+            self.concurrency = n
+        self.config.set("concurrency", n)
+        self.config.save()
         return True
 
     def reset_download_memory(self):
@@ -223,7 +359,10 @@ class DownloaderAPI:
             else:
                 lines.append(f"* {items[0].display_title} (individual link)")
             for s in items:
-                lines.append(f"  - {s.display_title}.mp3 ({s.youtube_url})")
+                ext = QUALITY_PRESETS.get(self.quality_key, QUALITY_PRESETS["mp3_320"])["format"]
+                ext_map = {"mp3": ".mp3", "flac": ".flac", "mp4": ".mp4"}
+                suffix = ext_map.get(ext, ".mp3")
+                lines.append(f"  - {s.display_title}{suffix} ({s.youtube_url})")
             lines.append("")
 
         return model, "\n".join(lines).strip()
@@ -346,6 +485,7 @@ class DownloaderAPI:
         with self.download_lock:
             self.active_group = task.group_name or task.display_title
             self.active_title = task.display_title
+            self.active_downloads += 1
             meta = self.group_meta.get(self.active_group)
             if meta:
                 try:
@@ -357,99 +497,146 @@ class DownloaderAPI:
     def _mark_finished(self, task: DownloadTask):
         g = task.group_name or task.display_title
         with self.download_lock:
+            self.active_downloads = max(0, self.active_downloads - 1)
             meta = self.group_meta.get(g)
             if meta:
                 meta["done"] += 1
                 if meta["done"] >= meta["total"]:
                     self.group_meta.pop(g, None)
                     self.group_order = [x for x in self.group_order if x != g]
-            self.active_group = ""
-            self.active_title = ""
+            if self.active_downloads <= 0:
+                self.active_group = ""
+                self.active_title = ""
         self._queue_event()
 
-    def _download_worker(self):
+    def _download_single(self, task: DownloadTask, idx: int, total: int):
         with self._state_lock:
             out_dir = Path(self.output_dir).expanduser()
             dup_mode = self.dup_mode
-            output_format = self.output_format
+            quality_key = self.quality_key
+            do_lyrics = self.embed_lyrics
+
         out_dir.mkdir(parents=True, exist_ok=True)
 
+        try:
+            with yt_dlp.YoutubeDL(
+                {
+                    "quiet": True,
+                    "no_warnings": True,
+                    "skip_download": True,
+                    "noplaylist": True,
+                    "nocheckcertificate": True,
+                }
+            ) as ydl:
+                info = ydl.extract_info(task.youtube_url, download=False)
+        except Exception as e:
+            self._log(f"  Failed before download: {str(e).splitlines()[0]}")
+            self._mark_finished(task)
+            return False
+
+        if not info:
+            self._log("  Could not read metadata, skipped.")
+            self._mark_finished(task)
+            return False
+
+        track = make_track(info)
+        dup = self.tracker.check_duplicate(track)
+        if dup and dup_mode == "skip":
+            self._log(f"  Duplicate: '{track.title}' already downloaded at {dup['downloaded_at']}")
+            self._log("  Skipped due to duplicate policy.")
+            self._mark_finished(task)
+            return False
+
+        try:
+            target_output = out_dir
+            folder = task.collection_name or (task.group_name if task.group_name != task.display_title else "")
+            if folder:
+                target_output = out_dir / safe_filename(folder)
+                target_output.mkdir(parents=True, exist_ok=True)
+
+            def progress_hook(d):
+                if d["status"] == "downloading":
+                    total_bytes = d.get("total_bytes") or d.get("total_bytes_estimate", 0)
+                    if total_bytes > 0:
+                        downloaded_bytes = d.get("downloaded_bytes", 0)
+                        pct = downloaded_bytes / total_bytes
+                        self._progress_event("", idx, total, pct, task.display_title)
+                elif d["status"] == "finished":
+                    self._progress_event("", idx, total, 1.0, task.display_title)
+
+            saved_track, path, actual_fmt = download_one(
+                task.youtube_url,
+                target_output,
+                self._log,
+                source_query=task.source_query,
+                quality_key=quality_key,
+                progress_hook=progress_hook,
+            )
+            self.tracker.add_download(saved_track, path)
+
+            if do_lyrics:
+                chosen_title = task.source_query.title if task.source_query and task.source_query.title else saved_track.title
+                chosen_artist = task.source_query.artist if task.source_query and task.source_query.artist else saved_track.artist
+                embed_lyrics_if_available(Path(path), chosen_title, chosen_artist, fmt=actual_fmt)
+
+            return True
+        except Exception as e:
+            self._log(f"  Failed: {str(e).splitlines()[0]}")
+            return False
+        finally:
+            self._mark_finished(task)
+
+    def _download_worker(self):
         downloaded = 0
-        failures = []
+        failures = 0
         idx = 0
 
         try:
+            with self._state_lock:
+                workers = self.concurrency
+
+            semaphore = threading.Semaphore(workers)
+            threads = []
+
             while True:
                 with self.download_lock:
                     stopping = self.stop_requested
                 if stopping:
                     break
+
                 task, remain = self._pop_download()
                 if not task:
                     break
 
                 idx += 1
                 self._mark_started(task)
-                self._status(f"Downloading... queue remaining: {remain}")
-                self._log(f"[{idx}] Checking {task.youtube_url}")
+                self._status(f"Downloading ({idx})... queue remaining: {remain}")
+                self._log(f"[{idx}] {task.display_title}")
 
-                try:
-                    with yt_dlp.YoutubeDL(
-                        {
-                            "quiet": True,
-                            "no_warnings": True,
-                            "skip_download": True,
-                            "noplaylist": True,
-                            "nocheckcertificate": True,
-                        }
-                    ) as ydl:
-                        info = ydl.extract_info(task.youtube_url, download=False)
-                except Exception as e:
-                    failures.append((task.youtube_url, str(e).splitlines()[0]))
-                    self._log(f"  Failed before download: {failures[-1][1]}")
-                    self._mark_finished(task)
-                    continue
+                def run_single(t=task, i=idx, tot=idx):
+                    with semaphore:
+                        with self.download_lock:
+                            stop = self.stop_requested
+                        if stop:
+                            return
+                        result = self._download_single(t, i, tot)
+                        if result:
+                            nonlocal downloaded
+                            downloaded += 1
+                        else:
+                            nonlocal failures
+                            failures += 1
 
-                if not info:
-                    failures.append((task.youtube_url, "Could not read metadata"))
-                    self._log("  Could not read metadata, skipped.")
-                    self._mark_finished(task)
-                    continue
+                t = threading.Thread(target=run_single, daemon=True)
+                t.start()
+                threads.append(t)
 
-                track = make_track(info)
-                dup = self.tracker.check_duplicate(track)
-                if dup and dup_mode == "skip":
-                    self._log(f"  Duplicate warning: '{track.title}' already downloaded at {dup['downloaded_at']}")
-                    self._log("  Skipped due to duplicate policy.")
-                    self._mark_finished(task)
-                    continue
+            for t in threads:
+                t.join(timeout=300)
 
-                try:
-                    target_output = out_dir
-                    folder = task.collection_name or (task.group_name if task.group_name != task.display_title else "")
-                    if folder:
-                        target_output = out_dir / safe_filename(folder)
-                        target_output.mkdir(parents=True, exist_ok=True)
-
-                    saved_track, path = download_one(
-                        task.youtube_url,
-                        target_output,
-                        self._log,
-                        source_query=task.source_query,
-                        output_format=output_format,
-                    )
-                    self.tracker.add_download(saved_track, path)
-                    downloaded += 1
-                except Exception as e:
-                    failures.append((task.youtube_url, str(e).splitlines()[0]))
-                    self._log(f"  Failed: {failures[-1][1]}")
-                finally:
-                    self._mark_finished(task)
-
-            self._log(f"Done. Downloaded: {downloaded}  Error: {len(failures)}")
-            if failures:
-                for i, (u, r) in enumerate(failures, start=1):
-                    self._log(f'{i}. "{u}" couldnt be downloaded: {r}')
+            self._log(f"Done. Downloaded: {downloaded}  Failed/skipped: {failures}")
+            if self.notifications:
+                notify("Download Complete", f"{downloaded} tracks saved. {failures} failed/skipped.")
         finally:
             with self.download_lock:
                 self.download_running = False
@@ -486,7 +673,7 @@ def main():
     html = resolve_html_path()
     api = DownloaderAPI()
     window = webview.create_window(
-        "sully's music downloader",
+        "Sully's Music Downloader",
         url=html.as_uri(),
         js_api=api,
         width=1400,

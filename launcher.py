@@ -2,8 +2,13 @@ from pathlib import Path
 import traceback
 import datetime
 import importlib
+import sys
 
 ROOT = Path(__file__).resolve().parent
+# Add ROOT to sys.path so .py files in Resources/ are found first
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 LOG = ROOT / 'launcher.log'
 
 
@@ -22,28 +27,9 @@ def main():
         app_webview.main()
         return
     except Exception:
-        log('app_webview.py failed; trying app_tk_pro.py')
+        log('app_webview.py failed; falling back to app.py')
         log(traceback.format_exc())
-
-    try:
-        log('Starting app_tk_pro.py')
-        app_tk_pro = importlib.import_module('app_tk_pro')
-        app_tk_pro.main()
-        return
-    except Exception:
-        log('app_tk_pro.py failed; trying app_ctk.py')
-        log(traceback.format_exc())
-
-    try:
-        import customtkinter  # noqa: F401
-        log('Starting app_ctk.py')
-        app_ctk = importlib.import_module('app_ctk')
-        app_ctk.main()
-        return
-    except Exception:
-        log('app_ctk.py failed; falling back to app.py')
-        log(traceback.format_exc())
-
+ 
     try:
         app = importlib.import_module('app')
         app.main()

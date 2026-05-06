@@ -4,11 +4,27 @@ Free desktop app that:
 - Accepts YouTube / YouTube Music / Spotify / Apple Music / mixed links.
 - Auto-parses playlists/albums and single tracks.
 - Builds an editable pre-download list for confirmation.
-- Downloads as MP3 or MP4 (toggle in app).
-- Preserves metadata for MP3 (artist/title/album/date + cover when available).
+- Downloads as MP3 (128/256/320kbps), FLAC lossless, or MP4 (360p/720p/1080p).
+- Preserves metadata for MP3/FLAC (artist/title/album/date + cover when available).
+- Embeds lyrics automatically (optional, for popular tracks).
 - Creates album/playlist folders automatically.
 - Tracks duplicate downloads in SQLite and warns/skips (or force-downloads).
-- Supports queueing and stop-download control.
+- Supports queueing, concurrent downloads (1-3 workers), and stop-download control.
+- Auto-update checker with one-click update link.
+- Desktop app (.app on macOS, .bat on Windows) with auto-setup.
+
+## New Features (v1.0.0)
+
+- **Quality selector**: Choose MP3 (128/256/320), FLAC, or MP4 (360/720/1080p) in Settings
+- **Concurrent downloads**: Set 1-3 workers for faster batch downloads
+- **Lyrics embedding**: Auto-fetch and embed lyrics (toggle in Settings)
+- **Duplicate handling**: Skip duplicates or force re-download (configurable)
+- **Progress bar**: Real-time download progress with percentage and title display
+- **Scrollable logs**: Terminal panel auto-scrolls with manual scroll support
+- **Editable preview**: Review and edit links before adding to queue
+- **Theme support**: System/Dark/Light theme options
+- **macOS desktop app**: One-click `.app` builder with automatic updates
+- **Windows support**: Full PowerShell setup with desktop shortcut
 
 ## Important
 
@@ -54,15 +70,14 @@ pip install -r requirements.txt
 # 6. Launch the app
 python launcher.py
 ```
-
 The app window will open. Paste any music link and click download.
 
 **Step 3 — Create a Desktop launcher (optional)**
 Run this once to put a clickable app on your Desktop:
 ```bash
 python setup_desktop_shortcut.py
+python build_macos_app.sh
 ```
-
 > **Next time:** Just double-click **Sully's Music Downloader.app** on your Desktop.
 
 ---
@@ -82,7 +97,6 @@ winget install Python.Python.3.12
 # Install ffmpeg
 winget install Gyan.FFmpeg
 ```
-
 Close PowerShell and reopen it (not as Administrator) so the new tools are recognized.
 
 **Step 2 — Get the code and run the app**
@@ -100,7 +114,6 @@ python -m venv .venv
 # 4. Activate it
 .venv\Scripts\Activate.ps1
 ```
-
 > **Note:** If you get a red error about "execution policy", run `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned` first, then try the activate command again.
 
 ```powershell
@@ -110,7 +123,6 @@ pip install -r requirements.txt
 # 6. Launch the app
 python launcher.py
 ```
-
 The app window will open. Paste any music link and click download.
 
 **Step 3 — Create a Desktop launcher (optional)**
@@ -118,7 +130,6 @@ Run this once to put a clickable shortcut on your Desktop:
 ```powershell
 python setup_desktop_shortcut.py
 ```
-
 > **Next time:** Just double-click **Sully's Music Downloader.bat** on your Desktop.
 
 ---
@@ -164,7 +175,6 @@ pip install -r requirements.txt
 # 6. Launch the app
 python launcher.py
 ```
-
 The app window will open. Paste any music link and click download.
 
 > **Next time:** Open Terminal, run `cd ~/MusicDownloader && source .venv/bin/activate && python launcher.py`

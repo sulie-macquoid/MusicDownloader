@@ -12,12 +12,31 @@ from html import unescape
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from tkinter import END, StringVar, BooleanVar, IntVar, Tk, Toplevel, filedialog, messagebox, ttk
-from tkinter.scrolledtext import ScrolledText
 from urllib.parse import urlparse
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from enum import Enum
+
+# Fix SSL certificate verification on macOS
+if sys.platform == "darwin":
+    try:
+        import certifi
+        os.environ["SSL_CERT_FILE"] = certifi.where()
+    except ImportError:
+        ssl._create_default_https_context = ssl._create_unverified_context
+
+# Only import tkinter if running directly (not imported by app_webview)
+if __name__ == "__main__":
+    from tkinter import END, StringVar, BooleanVar, IntVar, Tk, Toplevel, filedialog, messagebox, ttk
+    from tkinter.scrolledtext import ScrolledText
+
+# Fix SSL certificate verification on macOS
+if sys.platform == "darwin":
+    try:
+        import certifi
+        os.environ["SSL_CERT_FILE"] = certifi.where()
+    except ImportError:
+        ssl._create_default_https_context = ssl._create_unverified_context
 
 import yt_dlp
 from mutagen.id3 import APIC, ID3, TALB, TDRC, TIT2, TPE1, TXXX, USLT
@@ -122,9 +141,23 @@ def clean_song_title(raw_title: str, artist_hint: str = "") -> str:
         r"official video|official visualizer|official audio|audio only|lyric video|lyrics|"
         r"music video|visualizer|mv|hd|4k|topic"
     )
-    title = re.sub(rf"\s*\((?:{noise})[^)]*\)\s*", " ", title, flags=re.IGNORECASE)
-    title = re.sub(rf"\s*\[(?:{noise})[^\]]*\]\s*", " ", title, flags=re.IGNORECASE)
+    # Remove noise in parentheses: "Song (4K) - Channel" -> "Song  - Channel"
+    title = re.sub(rf"\s*\((?:{noise})[^)]*\)", " ", title, flags=re.IGNORECASE)
+    # Remove noise in brackets: "Song [Official Video]" -> "Song "
+    title = re.sub(rf"\s*\[(?:{noise})[^\]]*\]", " ", title, flags=re.IGNORECASE)
+    # Remove trailing noise after dash: "Song - topic" -> "Song"
     title = re.sub(rf"\s*-\s*(?:{noise}).*$", "", title, flags=re.IGNORECASE)
+    # Clean up "Song  - Channel" -> "Song - Channel" then split properly
+    title = re.sub(r"\s+", " ", title)
+    # Now handle "Song - Channel" pattern - if channel name is long, title is second part
+    if " - " in title:
+        parts = [p.strip() for p in title.split(" - ", 1)]
+        if len(parts) == 2:
+            # If first part looks like a channel name (many words) and second part is short, swap
+            if len(parts[0].split()) > 3 and len(parts[1].split()) <= 6:
+                title = parts[1]
+            elif len(parts[0].split()) <= 6:
+                title = parts[1]
 
     title = re.sub(r"\s+", " ", title).strip(" -_.,")
     return title or "Unknown Title"
@@ -757,6 +790,7 @@ def pick_youtube_for_query(query: MusicQuery):
 
 
 def _build_download_opts(output_dir: Path, quality_key: str):
+    output_dir = Path(output_dir)
     preset = QUALITY_PRESETS.get(quality_key, QUALITY_PRESETS["mp3_320"])
     fmt = preset["format"]
 
@@ -804,7 +838,9 @@ def download_one(
     log,
     source_query: MusicQuery | None = None,
     quality_key: str = "mp3_320",
+    progress_hook=None,
 ):
+    output_dir = Path(output_dir)
     opts = {
         "quiet": True,
         "no_warnings": True,
@@ -820,6 +856,8 @@ def download_one(
     track = make_track(info)
 
     dl_opts, fmt = _build_download_opts(output_dir, quality_key)
+    if progress_hook:
+        dl_opts["progress_hooks"] = [progress_hook]
 
     with yt_dlp.YoutubeDL(dl_opts) as ydl:
         result = ydl.extract_info(url, download=True)
@@ -841,7 +879,7 @@ def download_one(
     elif fmt == "flac":
         enrich_flac_tags(media_path, track, source_query=source_query)
     log(f"Saved: {media_path.name}")
-    return track, str(media_path)
+    return track, str(media_path), fmt
 
 
 def notify(title: str, message: str):
@@ -885,7 +923,7 @@ def check_for_updates() -> str | None:
 
 
 class App:
-    def __init__(self, root: Tk):
+    def __init__(self, root):
         self.root = root
         self.root.title("sully's music downloader")
         self.root.geometry("980x680")
