@@ -57,7 +57,13 @@ python launcher.py
 
 The app window will open. Paste any music link and click download.
 
-> **Next time:** Open Terminal, run `cd ~/MusicDownloader && source .venv/bin/activate && python launcher.py`
+**Step 3 — Create a Desktop launcher (optional)**
+Run this once to put a clickable app on your Desktop:
+```bash
+python setup_desktop_shortcut.py
+```
+
+> **Next time:** Just double-click **Sully's Music Downloader.app** on your Desktop.
 
 ---
 
@@ -107,7 +113,13 @@ python launcher.py
 
 The app window will open. Paste any music link and click download.
 
-> **Next time:** Open PowerShell, run `cd MusicDownloader`, then `.venv\Scripts\Activate.ps1`, then `python launcher.py`
+**Step 3 — Create a Desktop launcher (optional)**
+Run this once to put a clickable shortcut on your Desktop:
+```powershell
+python setup_desktop_shortcut.py
+```
+
+> **Next time:** Just double-click **Sully's Music Downloader.bat** on your Desktop.
 
 ---
 
