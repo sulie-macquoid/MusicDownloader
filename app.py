@@ -67,7 +67,7 @@ CONFIG_PATH = app_data_dir() / "config.json"
 YOUTUBE_HOST_MARKERS = ("youtube.com", "youtu.be", "music.youtube.com")
 REPO_URL = "https://api.github.com/repos/sulie-macquoid/MusicDownloader/releases/latest"
 GITHUB_REPO_URL = "https://github.com/sulie-macquoid/MusicDownloader"
-CURRENT_VERSION = "1.0.0"
+CURRENT_VERSION = "1.1.0"
 
 
 class DownloadState(Enum):
@@ -259,7 +259,7 @@ def extract_meta_value(html: str, key: str, prop: bool = False):
 
 
 def extract_spotify_track_query(track_url: str, html: str = ""):
-    # Try HTML scraping first
+    # Try HTML scraping first (for playlists/albums)
     if html:
         title = extract_meta_value(html, "og:title", prop=True)
         artist = extract_meta_value(html, "music:musician_description")
@@ -274,15 +274,15 @@ def extract_spotify_track_query(track_url: str, html: str = ""):
                 artwork_url=artwork_url,
             )
     
-    # Fallback: Return a query that will search YouTube
-    # yt-dlp can search Spotify tracks on YouTube automatically
+    # For individual tracks, return a placeholder
+    # Note: yt-dlp cannot download Spotify URLs directly due to DRM protection
+    # Users should use YouTube URLs for best results
     match = re.search(r'/track/([a-zA-Z0-9]+)', track_url)
     if match:
-        # Return minimal query - yt-dlp will handle the rest
         return MusicQuery(
-            title="",
-            artist="",
-            source_url=track_url,
+            title="[Spotify Track - Convert to YouTube]",
+            artist="Unknown",
+            source_url="",  # Empty URL will cause skip with warning
         )
     return None
 
@@ -292,10 +292,13 @@ def extract_spotify_queries(url: str):
     if not page:
         return [], ""
     path = (urlparse(url).path or "").lower()
+    
+    # For individual tracks, return a query that will show warning
     if "/track/" in path:
         q = extract_spotify_track_query(url, html=page)
         return ([q] if q else []), ""
     
+    # For playlists/albums, try to extract track URLs
     track_urls = re.findall(
         r'<meta name="music:song" content="(https://open\.spotify\.com/track/[^"]+)"',
         page,
@@ -311,9 +314,11 @@ def extract_spotify_queries(url: str):
                 queries.append(q)
         except Exception:
             continue
+    
     collection_name = ""
     if "/playlist/" in path or "/album/" in path:
         collection_name = extract_meta_value(page, "og:title", prop=True)
+    
     return queries, collection_name
 
 

@@ -312,7 +312,20 @@ class DownloaderAPI:
             return tasks
 
         self._log("Detected non-YouTube link. Parsing track metadata...")
+        
+        # Warn about Spotify limitations
+        if 'spotify.com' in url:
+            self._log("⚠️ Spotify direct downloads not supported. Use YouTube URLs for best results.")
+        
         queries, collection_name = extract_music_queries(url)
+        
+        # Filter out Spotify tracks with no URL
+        if 'spotify.com' in url:
+            queries = [q for q in queries if q.source_url]
+            if not queries:
+                self._log("❌ No valid tracks found. Try using YouTube URLs instead.")
+                return tasks
+        
         for idx, q in enumerate(queries, start=1):
             self._status(f"Searching YouTube {idx}/{len(queries)}")
             yt_url = pick_youtube_for_query(q)
