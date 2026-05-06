@@ -1,17 +1,17 @@
 # Sully's Music Downloader
 
 Free desktop app that:
-- Accepts YouTube / YouTube Music / Spotify / Apple Music / mixed links.
-- Auto-parses playlists/albums and single tracks.
-- Builds an editable pre-download list for confirmation.
-- Downloads as MP3 (128/256/320kbps), FLAC lossless, or MP4 (360p/720p/1080p).
-- Preserves metadata for MP3/FLAC (artist/title/album/date + cover when available).
-- Embeds lyrics automatically (optional, for popular tracks).
-- Creates album/playlist folders automatically.
-- Tracks duplicate downloads in SQLite and warns/skips (or force-downloads).
-- Supports queueing, concurrent downloads (1-3 workers), and stop-download control.
-- Auto-update checker with one-click update link.
-- Desktop app (.app on macOS, .bat on Windows) with auto-setup.
+- Accepts **YouTube, Spotify, and Apple Music** links (individual tracks, playlists, or albums)
+- Auto-parses playlists/albums and single tracks from all supported platforms
+- Builds an editable pre-download list for confirmation
+- Downloads as MP3 (128/256/320kbps), FLAC lossless, or MP4 (360p/720p/1080p)
+- Preserves metadata for MP3/FLAC (artist/title/album/date + cover when available)
+- Embeds lyrics automatically (optional, for popular tracks)
+- Creates album/playlist folders automatically
+- Tracks duplicate downloads in SQLite and warns/skips (or force-downloads)
+- Supports queueing, concurrent downloads (1-3 workers), and stop-download control
+- Auto-update checker with one-click update link
+- Desktop app (.app on macOS, .bat on Windows) with auto-setup
 
 ## New Features (v1.0.0)
 

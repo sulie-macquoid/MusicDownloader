@@ -241,10 +241,14 @@ def split_title_artist(text: str):
 
 
 def fetch_text(url: str) -> str:
-    req = urllib.request.Request(url)
+    headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
+    req = urllib.request.Request(url, headers=headers)
     ctx = ssl._create_unverified_context()
-    with urllib.request.urlopen(req, timeout=20, context=ctx) as response:
-        return response.read().decode("utf-8", errors="replace")
+    try:
+        with urllib.request.urlopen(req, timeout=20, context=ctx) as response:
+            return response.read().decode("utf-8", errors="replace")
+    except Exception:
+        return ""
 
 
 def extract_meta_value(html: str, key: str, prop: bool = False):
@@ -255,36 +259,50 @@ def extract_meta_value(html: str, key: str, prop: bool = False):
 
 
 def extract_spotify_track_query(track_url: str, html: str = ""):
-    page = html or fetch_text(track_url)
-    title = extract_meta_value(page, "og:title", prop=True)
-    artist = extract_meta_value(page, "music:musician_description")
-    release_date = extract_meta_value(page, "music:release_date")
-    artwork_url = extract_meta_value(page, "og:image", prop=True)
-    if title:
+    # Try HTML scraping first
+    if html:
+        title = extract_meta_value(html, "og:title", prop=True)
+        artist = extract_meta_value(html, "music:musician_description")
+        release_date = extract_meta_value(html, "music:release_date")
+        artwork_url = extract_meta_value(html, "og:image", prop=True)
+        if title:
+            return MusicQuery(
+                title=title,
+                artist=artist,
+                source_url=track_url,
+                release_date=release_date,
+                artwork_url=artwork_url,
+            )
+    
+    # Fallback: Return a query that will search YouTube
+    # yt-dlp can search Spotify tracks on YouTube automatically
+    match = re.search(r'/track/([a-zA-Z0-9]+)', track_url)
+    if match:
+        # Return minimal query - yt-dlp will handle the rest
         return MusicQuery(
-            title=title,
-            artist=artist,
+            title="",
+            artist="",
             source_url=track_url,
-            release_date=release_date,
-            artwork_url=artwork_url,
         )
     return None
 
 
 def extract_spotify_queries(url: str):
     page = fetch_text(url)
+    if not page:
+        return [], ""
     path = (urlparse(url).path or "").lower()
     if "/track/" in path:
         q = extract_spotify_track_query(url, html=page)
         return ([q] if q else []), ""
-
+    
     track_urls = re.findall(
         r'<meta name="music:song" content="(https://open\.spotify\.com/track/[^"]+)"',
         page,
         flags=re.IGNORECASE,
     )
     track_urls = list(dict.fromkeys(track_urls))[:200]
-
+    
     queries = []
     for t_url in track_urls:
         try:
