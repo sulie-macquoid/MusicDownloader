@@ -23,81 +23,136 @@ Only download content you have rights to use.
 
 ### macOS
 
+**Step 1 — Install prerequisites**
+If you don't have Homebrew installed, run this in Terminal first:
 ```bash
-# Clone the repo
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
+Then install Git, Python, and ffmpeg:
+```bash
+brew install git python ffmpeg
+```
+
+**Step 2 — Get the code and run the app**
+Open Terminal and paste the commands below one by one (press Enter after each):
+```bash
+# 1. Download the app
 git clone https://github.com/sulie-macquoid/MusicDownloader.git
+
+# 2. Go into the folder
 cd MusicDownloader
 
-# Set up virtual environment
+# 3. Create a Python environment
 python3 -m venv .venv
+
+# 4. Activate it
 source .venv/bin/activate
+
+# 5. Install dependencies
 pip install -r requirements.txt
 
-# Install ffmpeg
-brew install ffmpeg
-
-# Run the app
+# 6. Launch the app
 python launcher.py
 ```
+
+The app window will open. Paste any music link and click download.
+
+> **Next time:** Open Terminal, run `cd ~/MusicDownloader && source .venv/bin/activate && python launcher.py`
+
+---
 
 ### Windows
 
-```powershell
-# Clone the repo
-git clone https://github.com/sulie-macquoid/MusicDownloader.git
-cd MusicDownloader
+**Step 1 — Install prerequisites**
+Open PowerShell as Administrator and run these commands one by one:
 
-# Set up virtual environment
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+```powershell
+# Install Git (for downloading the app)
+winget install Git.Git
+
+# Install Python
+winget install Python.Python.3.12
 
 # Install ffmpeg
 winget install Gyan.FFmpeg
+```
 
-# Run the app
+Close PowerShell and reopen it (not as Administrator) so the new tools are recognized.
+
+**Step 2 — Get the code and run the app**
+Open PowerShell and paste the commands below one by one (press Enter after each):
+```powershell
+# 1. Download the app
+git clone https://github.com/sulie-macquoid/MusicDownloader.git
+
+# 2. Go into the folder
+cd MusicDownloader
+
+# 3. Create a Python environment
+python -m venv .venv
+
+# 4. Activate it
+.venv\Scripts\Activate.ps1
+```
+
+> **Note:** If you get a red error about "execution policy", run `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned` first, then try the activate command again.
+
+```powershell
+# 5. Install dependencies
+pip install -r requirements.txt
+
+# 6. Launch the app
 python launcher.py
 ```
+
+The app window will open. Paste any music link and click download.
+
+> **Next time:** Open PowerShell, run `cd MusicDownloader`, then `.venv\Scripts\Activate.ps1`, then `python launcher.py`
+
+---
 
 ### Linux
 
+**Step 1 — Install prerequisites**
+Open your terminal and install Git, Python, and ffmpeg:
+
+Debian/Ubuntu:
 ```bash
+sudo apt update && sudo apt install -y git python3 python3-venv python3-pip ffmpeg
+```
+
+Fedora:
+```bash
+sudo dnf install -y git python3 python3-pip ffmpeg
+```
+
+Arch:
+```bash
+sudo pacman -S git python ffmpeg
+```
+
+**Step 2 — Get the code and run the app**
+Open Terminal and paste the commands below one by one (press Enter after each):
+```bash
+# 1. Download the app
 git clone https://github.com/sulie-macquoid/MusicDownloader.git
+
+# 2. Go into the folder
 cd MusicDownloader
 
+# 3. Create a Python environment
 python3 -m venv .venv
+
+# 4. Activate it
 source .venv/bin/activate
+
+# 5. Install dependencies
 pip install -r requirements.txt
 
-# Install ffmpeg (Debian/Ubuntu)
-sudo apt install ffmpeg
-
-# Run the app
+# 6. Launch the app
 python launcher.py
 ```
 
-## Build Standalone App
+The app window will open. Paste any music link and click download.
 
-### macOS (.app)
-
-```bash
-cd MusicDownloader
-source .venv/bin/activate
-./build_macos_app.sh
-```
-
-Output: `dist/Sully's Music Downloader.app`
-
-### Windows (.exe)
-
-```powershell
-cd MusicDownloader
-.venv\Scripts\Activate.ps1
-pip install pyinstaller
-pyinstaller --name "Sully's Music Downloader" --noconfirm --windowed --onefile launcher.py
-```
-
-Output: `dist\Sully's Music Downloader.exe`
-
-> **Note:** Keep `ui/index.html` bundled if switching to one-folder mode.
-> For reliable ffmpeg usage on Windows, install ffmpeg and add it to your PATH.
+> **Next time:** Open Terminal, run `cd ~/MusicDownloader && source .venv/bin/activate && python launcher.py`
