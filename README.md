@@ -12,6 +12,7 @@ Free desktop app that:
 - Supports queueing, concurrent downloads (1-3 workers), and stop-download control
 - Auto-update checker with one-click update link
 - Desktop app (.app on macOS, .bat on Windows) with auto-setup
+- **NEW: Spotify support** (requires free API credentials - see below)
 
 ## New Features (v1.1.0)
 
@@ -27,14 +28,16 @@ Free desktop app that:
 - **macOS desktop app**: One-click `.app` builder with automatic updates
 - **Windows support**: Full PowerShell setup with desktop shortcut
 
-### Setting up Spotify (Free - 30 seconds)
+## Setting up Spotify (Free - 30 seconds)
 
 1. Go to https://developer.spotify.com/dashboard
-2. Create an app (any name, description)
+2. Create an app (any name, any description)
 3. Copy your **Client ID** and **Client Secret**
 4. Open the app → Settings → Spotify API
 5. Paste your credentials and click Save
 6. Now paste any Spotify track, album, or playlist URL!
+
+> **Note**: Spotify API credentials are free and only needed once. Your app will remember them.
 
 ## Important
 
@@ -54,6 +57,7 @@ If you don't have Homebrew installed, run this in Terminal first:
 ```bash
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 ```
+
 Then install Git, Python, and ffmpeg:
 ```bash
 brew install git python ffmpeg
@@ -111,6 +115,7 @@ Close PowerShell and reopen it (not as Administrator) so the new tools are recog
 
 **Step 2 — Get the code and run the app**
 Open PowerShell and paste the commands below one by one (press Enter after each):
+
 ```powershell
 # 1. Download the app
 git clone https://github.com/sulie-macquoid/MusicDownloader.git
@@ -151,7 +156,7 @@ Open your terminal and install Git, Python, and ffmpeg:
 
 Debian/Ubuntu:
 ```bash
-sudo apt update && sudo apt install -y git python3 python3-venv python3-pip ffmpeg
+sudo apt update && sudo apt install -y git python3 python3-pip ffmpeg
 ```
 
 Fedora:
